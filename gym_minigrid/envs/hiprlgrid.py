@@ -5,7 +5,7 @@ import numpy as np
 from SpatialMap import SpatialMap, ObjectMap
 import rospy
 from nav_msgs.msg import OccupancyGrid
-from std_msgs.msg import Int32
+from std_msgs.msg import Int32MultiArray
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf import transformations
 import time
@@ -41,7 +41,7 @@ class HiPRLGridV0(MiniGridEnv):
         self.agent_pos_pub = rospy.Publisher("pose",PoseStamped, queue_size = 1, latch=True)
         self.agent_init_pos_pub = rospy.Publisher("initial_pose", PoseStamped, queue_size = 1, latch=True)
         self.navigation_map_pub = rospy.Publisher("navigation_map", OccupancyGrid, queue_size = 1, latch=True)
-        self.explore_action_sub = rospy.Subscriber("action", Int32, self.explore_action_cb)
+        self.explore_action_sub = rospy.Subscriber("action_plan", Int32MultiArray, self.explore_plan_cb)
         # temporal abstraction: 5 timestep here (param)
         self.temp_abstr_lev = 5
         self.coverage_reward_coeff = 1.0/26
@@ -54,7 +54,7 @@ class HiPRLGridV0(MiniGridEnv):
         self.width = grid_size_
         self.height = grid_size_
         self.render_counter = 0
-        self.explore_action = 0
+        self.explore_action_plan = []
         self.explore_action_set = False
         #self.br = tf2_ros.TransformBroadcaster()
         
@@ -69,10 +69,14 @@ class HiPRLGridV0(MiniGridEnv):
 #            self.spatial_map_pub.publish(self.spatial_map.map)
 #            self.object_map_pub.publish(self.object_map.map)
 #            self.spatial_map.rate.sleep()
-    def explore_action_cb(self, msg):
-        self.explore_action = msg.data
+    def explore_plan_cb(self, msg):
+        self.explore_action_plan  = [0] * len(msg.data)
+        for i in range(len(msg.data)):
+            self.explore_action_plan[i] = msg.data[i]
         self.explore_action_set = True
-
+        print("Explore_plan_cb called")
+        
+        # generate actions from the index_plan
 
     def _gen_grid(self, width, height):
         # Create the grid
@@ -294,6 +298,7 @@ class HiPRLGridV0(MiniGridEnv):
         ros_agent_pos = PoseStamped()
         ros_agent_pos.header.frame_id = "map"
         ros_agent_pos.header.stamp = rospy.Time.now()
+        print("self.agent_pos: %d, %d" % (self.agent_pos[0], self.agent_pos[1]) )
         ros_agent_pos.pose.position.x = (self.agent_pos[0]+0.5) * self.spatial_map.map.info.resolution 
         ros_agent_pos.pose.position.y = (self.spatial_map.map.info.height - self.agent_pos[1] - 1 + 0.5) * self.spatial_map.map.info.resolution
         ros_agent_pos.pose.position.z = 0
@@ -447,6 +452,7 @@ class HiPRLGridV0(MiniGridEnv):
         try:
             init_pose_update = rospy.ServiceProxy('init_pose_update', InitPos)
             result = init_pose_update(self.agent_init_pos.pose.position.x, self.agent_init_pos.pose.position.y, self.agent_init_dir)
+            
         except rospy.ServiceException as e:
             print("Service call failed: %s" %e)
         print("init_pose_update: ", result)
@@ -462,14 +468,18 @@ class HiPRLGridV0(MiniGridEnv):
         print("pose_update: ", result)       
     
         # Execute mapConvert in findFrontier, which generates plan
-        print("action: ", self.explore_action)
         self.navigation_map_pub.publish(self.spatial_map.map)
-        while(self.explore_action_set is not True):
+        while(self.explore_action_set is False):
+            print(self.explore_action_set)
             time.sleep(0.1)
-            #block
-        print("action: ", self.explore_action)
+            #block until explore plan is subscribed and updated
+        print("plan: ", self.explore_action_plan)
         self.explore_action_set = False
-        return self.explore_action
+        
+        # step using actions extracted from explore_action_plan
+        # temporally, set left
+        #self.explore_action_plan = [self.Actions.left] * 4
+        return self.explore_action_plan
             
 register(
     id='MiniGrid-HiPRLGrid-v0',

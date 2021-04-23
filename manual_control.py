@@ -54,16 +54,17 @@ def invoke(meta_action):
                 time.sleep(1)
                 
     if meta_action == env.meta_actions.explore:
-        action = env.explore()
-        obs, reward, done, info = env.step(action)
-        print('step=%s, reward=%.2f' % (env.step_count, reward))
-        reward_sum += reward
-        if done:
-            print('done!')
-            reset()
-        else:
-            redraw(obs)
-            time.sleep(1)
+        actions = env.explore()
+        for i in range(len(actions)):
+            obs, reward, done, info = env.step(actions[i])
+            print('step=%s, reward=%.2f' % (env.step_count, reward))
+            reward_sum += reward
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
+                time.sleep(1)
         
         #process.stop()
     print('%s, Overall reward=%.2f' % (meta_action, reward_sum))
