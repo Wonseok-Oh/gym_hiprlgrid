@@ -115,6 +115,7 @@ class WorldObj:
 
     def encode(self):
         """Encode the a description of this object as a 3-tuple of integers"""
+
         return (OBJECT_TO_IDX[self.type], COLOR_TO_IDX[self.color], 0, 0)
 
     @staticmethod
@@ -308,6 +309,7 @@ class Key(WorldObj):
 
     def encode(self):
         """Encode the a description of this object as a 4-tuple of integers"""
+        
         return (OBJECT_TO_IDX[self.type], COLOR_TO_IDX[self.color], 0, self.objectId)
 
 
@@ -362,12 +364,12 @@ class Box(WorldObj):
     
     def encode(self):
         """Encode the a description of this object as a 3-tuple of integers"""
-    
         # State, 0: close, 1: open
         if self.isOpen and self.contains != None:
             state = 1 + OBJECT_TO_IDX[self.contains.type]*10 + COLOR_TO_IDX[self.contains.color]*100 + self.contains.objectId*1000
         elif not self.isOpen and self.contains != None:
             state = 0 + OBJECT_TO_IDX[self.contains.type]*10 + COLOR_TO_IDX[self.contains.color]*100 + self.contains.objectId*1000
+
         elif self.isOpen and self.contains == None:
             state = 1
         else:
@@ -551,7 +553,6 @@ class Grid:
         :param r: target renderer object
         :param tile_size: tile size in pixels
         """
-        print("render is called")
         if highlight_mask is None:
             highlight_mask = np.zeros(shape=(self.width, self.height), dtype=np.bool)
 
@@ -590,7 +591,7 @@ class Grid:
         if vis_mask is None:
             vis_mask = np.ones((self.width, self.height), dtype=bool)
 
-        array = np.zeros((self.width, self.height, 4), dtype='uint8')
+        array = np.zeros((self.width, self.height, 4), dtype='uint16')
 
         for i in range(self.width):
             for j in range(self.height):
@@ -605,7 +606,6 @@ class Grid:
 
                     else:
                         array[i, j, :] = v.encode()
-
         return array
 
     @staticmethod
@@ -1204,10 +1204,11 @@ class MiniGridEnv(gym.Env):
                     
         # Drop an object
         elif action == self.actions.drop:
-            if not fwd_cell and self.carrying: # fwd_cell is empty and agent is carrying something lol...
-                self.grid.set(*fwd_pos, self.carrying)
-                self.carrying.cur_pos = fwd_pos
-                self.carrying = None
+            if not fwd_cell:
+                if self.carrying: # fwd_cell is empty and agent is carrying something lol...
+                    self.grid.set(*fwd_pos, self.carrying)
+                    self.carrying.cur_pos = fwd_pos
+                    self.carrying = None
             elif fwd_cell.type == 'box' and fwd_cell.isOpen and fwd_cell.contains == None and self.carrying:
                 fwd_cell.contains = self.carrying
                 self.carrying.cur_pos = fwd_pos
@@ -1278,7 +1279,7 @@ class MiniGridEnv(gym.Env):
         """
 
         grid, vis_mask = self.gen_obs_grid()
-
+        
         # Encode the partially observable view into a numpy array
         image = grid.encode(vis_mask)
 

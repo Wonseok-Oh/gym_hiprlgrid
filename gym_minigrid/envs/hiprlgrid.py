@@ -4,13 +4,19 @@ from gym_minigrid.envs.empty import EmptyEnv
 import numpy as np
 from SpatialMap import SpatialMap, ObjectMap
 import rospy
+from std_srvs.srv import Empty
+from rosplan_dispatch_msgs.srv import DispatchService
 from nav_msgs.msg import OccupancyGrid
 from std_msgs.msg import Int32MultiArray
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf import transformations
-import time
+import time, copy
 
 from find_frontier.srv import InitPos, InitPosResponse
+from hiprl_replicate.msg import Obs
+from hiprl_replicate.srv import *
+from rosplan_dispatch_msgs.msg import CompletePlan
+from rosplan_knowledge_msgs.msg import processReset
 
 #import tf_conversions
 #import tf2_ros
@@ -34,14 +40,19 @@ class HiPRLGridV0(MiniGridEnv):
     
 
     
-    def __init__(self, grid_size_ = 10, max_steps_ = 300, agent_view_size_ = 5, num_objects=3, num_boxes = 3):
-        self.init_node = rospy.init_node('map_publisher', anonymous=True)
+    def __init__(self, grid_size_ = 10, max_steps_ = 300, agent_view_size_ = 5, num_objects=1, num_boxes = 3):
+        self.init_node = rospy.init_node('gym_env', anonymous=True)
         self.spatial_map_pub = rospy.Publisher("spatial_map", OccupancyGrid, queue_size = 1, latch=True)
         self.object_map_pub = rospy.Publisher("object_map", OccupancyGrid, queue_size = 1)
         self.agent_pos_pub = rospy.Publisher("pose",PoseStamped, queue_size = 1, latch=True)
+        self.goal_pos_pub = rospy.Publisher("goal_pose", PoseStamped, queue_size = 1, latch=True)
         self.agent_init_pos_pub = rospy.Publisher("initial_pose", PoseStamped, queue_size = 1, latch=True)
         self.navigation_map_pub = rospy.Publisher("navigation_map", OccupancyGrid, queue_size = 1, latch=True)
         self.explore_action_sub = rospy.Subscriber("action_plan", Int32MultiArray, self.explore_plan_cb)
+        self.observation_pub = rospy.Publisher("observation", Obs, queue_size = 1)
+        self.reset_pub = rospy.Publisher("rosplan_knowledge_base/reset", processReset, queue_size = 1, latch=True)
+        #self.action_service = rospy.Service("action_execution", ActionExecution, self.execute_action)
+        self.complete_plan_sub = rospy.Subscriber("/rosplan_parsing_interface/complete_plan", CompletePlan, self.complete_plan_cb)
         # temporal abstraction: 5 timestep here (param)
         self.temp_abstr_lev = 5
         self.coverage_reward_coeff = 1.0/26
@@ -56,6 +67,15 @@ class HiPRLGridV0(MiniGridEnv):
         self.render_counter = 0
         self.explore_action_plan = []
         self.explore_action_set = False
+        self.complete_plan = []
+        self.complete_plan_flag = False
+        self.goal_pos = None
+        #self.planner_action_set = False
+        #self.planner_action_plan = []
+        self.planner_action_num = 0
+        #self.dispatch_plan_end = True
+        #self.action_execution_flag = False
+
         #self.br = tf2_ros.TransformBroadcaster()
         
         
@@ -69,6 +89,62 @@ class HiPRLGridV0(MiniGridEnv):
 #            self.spatial_map_pub.publish(self.spatial_map.map)
 #            self.object_map_pub.publish(self.object_map.map)
 #            self.spatial_map.rate.sleep()
+
+    def complete_plan_cb(self, msg):
+        self.complete_plan = msg.plan
+        self.complete_plan_flag = True
+        self.dispatch_plan_end = False
+
+    def generate_actions_from_complete_plan(self):
+        actions = []
+        self.planner_tracking_dir = self.agent_dir
+        for item in self.complete_plan:
+            item_actions = []
+            dir_key_value = item.parameters[-1]
+        
+            # the last parameter should set key as dir
+            assert(dir_key_value.key == 'dir')
+        
+            # make robot to face given direction
+            if dir_key_value.value == 'left':
+                goal_dir = 2
+            elif dir_key_value.value == 'up':
+                goal_dir = 3
+            elif dir_key_value.value == 'right':
+                goal_dir = 0
+            elif dir_key_value.value == 'down':
+                goal_dir = 1
+
+            dth = self.planner_tracking_dir - goal_dir
+            if dth < 0:
+                dth += 4
+            if dth == 3:
+                item_actions.append(self.Actions.right)
+            
+            else:
+                for i in range(dth):
+                    item_actions.append(self.Actions.left)
+            
+            self.planner_tracking_dir = goal_dir
+            if item.name == "move-robot":
+                item_actions.append(self.Actions.forward)
+                
+    
+            elif item.name == "openobject":
+                item_actions.append(self.Actions.open)
+                
+            elif item.name == "pickupobjectinreceptacle" or item.name == "pickupobject":
+                item_actions.append(self.Actions.pickup)
+                
+            elif item.name == "putobjectinreceptacle" or item.name == "putobject":
+                item_actions.append(self.Actions.drop)
+                
+            elif item.name == "closeobject":
+                item_actions.append(self.Actions.close)
+            
+            actions.append((item, item_actions))
+        return actions
+        
     def explore_plan_cb(self, msg):
         self.explore_action_plan  = [0] * len(msg.data)
         for i in range(len(msg.data)):
@@ -106,7 +182,7 @@ class HiPRLGridV0(MiniGridEnv):
         # initially, put a box containing a ball
         boxColor = self._rand_elem(COLOR_NAMES)
         objColor = self._rand_elem(COLOR_NAMES)
-        obj = Box(len(objs), boxColor, Ball(len(objs)+1, objColor) )
+        obj = Box(len(boxes), boxColor, Ball(len(objs), objColor) )
         boxes.append(boxColor)
         objs.append(('ball', objColor))
         pos = self.place_obj(obj, reject_fn=near_obj)
@@ -143,6 +219,15 @@ class HiPRLGridV0(MiniGridEnv):
             pos = self.place_obj(box, reject_fn=near_obj)
             boxes.append(boxColor)
             boxPos.append(pos)
+        
+        # place a goal    
+        obj = Goal()
+        objColor = self._rand_elem(COLOR_NAMES)
+        self.goal_pos = self.place_obj(obj, reject_fn = near_obj)
+        
+        # publish the goal position to update the knowledge base
+        self.publish_ros_goal_pos(self.goal_pos)
+        
         # Randomize the agent start position and orientation
         self.place_agent()
 
@@ -152,15 +237,11 @@ class HiPRLGridV0(MiniGridEnv):
         self.move_pos = objPos[self.objIdx]
 
         # Choose a target object (to put the first object into)
-        self.targetIdx = self._rand_int(0, len(boxes))
-        self.target_color = boxes[self.targetIdx]
-        self.target_pos = boxPos[self.targetIdx]
+        self.target_pos = self.goal_pos
 
-        self.mission = 'put the %s %s into the %s %s' % (
+        self.mission = 'put the %s %s into the goal' % (
             self.moveColor,
             self.move_type,
-            self.target_color,
-            'box'
         )
         
     def reset(self):
@@ -177,6 +258,19 @@ class HiPRLGridV0(MiniGridEnv):
         self.new_coverage = 0
         self.prev_agent_pos = None
         self.render_counter = 0
+        self.explore_action_plan = []
+        self.explore_action_set = False
+        #self.planner_action_set = False
+        #self.planner_action_plan = []
+        self.planner_action_num = 0
+        #self.dispatch_plan_end = True
+        self.action_execution_flag = False
+        self.complete_plan = []
+        self.complete_plan_flag = False
+        reset_msg = processReset()
+        reset_msg.domain_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_mini.pddl"
+        reset_msg.problem_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_problem0.pddl"
+        self.reset_pub.publish(reset_msg)
         return super().reset()
     
     def step(self, action):
@@ -185,6 +279,7 @@ class HiPRLGridV0(MiniGridEnv):
         #print("agent_pos: %d, %d" %(self.agent_pos[0], self.agent_pos[1]))
         #print("agent_dir: %d" % self.agent_dir)
         obs, reward, done, info = MiniGridEnv.step(self, action)
+        
         reward = -0.01 # constant time penalty
 
         # update spatial map & object map
@@ -199,6 +294,11 @@ class HiPRLGridV0(MiniGridEnv):
         #self.broadcast_tf()
 
         self.spatial_map.rate.sleep()
+        
+        # publish observation information to update knowledgebase
+        self.publish_observation(obs['image'])
+        print(obs['image'])
+        
         # reward for open/close action
         if info is not None:
             if info.can_toggle() and action == self.actions.open:
@@ -231,12 +331,13 @@ class HiPRLGridV0(MiniGridEnv):
                 reward += -1.0
 
         # If successfully dropping an object into the target
+        done = False
         u, v = self.dir_vec
         ox, oy = (self.agent_pos[0] + u, self.agent_pos[1] + v)
         tx, ty = self.target_pos
         if action == self.actions.drop and preCarrying:
             front_obj = self.grid.get(ox,oy)
-            if front_obj.type is 'box' and front_obj.contains is preCarrying:
+            if front_obj.type is 'goal':
                 if abs(ox - tx) == 0 and abs(oy - ty) == 0:
                     done = True
                     reward += 10
@@ -247,12 +348,63 @@ class HiPRLGridV0(MiniGridEnv):
         self.prev_agent_pos = self.agent_pos
         self.prev_agent_dir = self.agent_dir
         
+        #print("obs: ")
+        #print(obs)
+        
         #print(self.opened_receptacles)
         #print(self.closed_receptacles)
         #print(self.checked_receptacles)
 
         return obs, reward, done, info
 
+    def publish_observation(self, image):
+        ros_msg = Obs()
+    
+        for i in range(self.agent_view_size):
+            for j in range(self.agent_view_size):
+#                print("{}'th column, {}'th row".format(i,j))
+                abs_i, abs_j = self.get_world_coordinate(i, j)
+#                print("{}, {}".format(abs_i, abs_j))
+                if image[i][j][0] == OBJECT_TO_IDX['wall']:
+                    ros_msg.type_id_list.append(image[i][j][0])
+                    ros_msg.object_id_list.append(0)
+                    ros_msg.object_pos_list.append(abs_i)
+                    ros_msg.object_pos_list.append(abs_j)
+                    ros_msg.object_state_list.append(0)
+                
+                elif image[i][j][0] == OBJECT_TO_IDX['box']:
+                    ros_msg.type_id_list.append(image[i][j][0])
+                    ros_msg.object_id_list.append(image[i][j][3])
+                    ros_msg.object_pos_list.append(abs_i)
+                    ros_msg.object_pos_list.append(abs_j)
+                    ros_msg.object_state_list.append(image[i][j][2])
+                    
+                elif image[i][j][0] == OBJECT_TO_IDX['empty']:
+                    ros_msg.type_id_list.append(image[i][j][0])
+                    ros_msg.object_id_list.append(0)
+                    ros_msg.object_pos_list.append(abs_i)
+                    ros_msg.object_pos_list.append(abs_j)
+                    ros_msg.object_state_list.append(0)
+                    
+                elif image[i][j][0] == OBJECT_TO_IDX['ball']:
+                    ros_msg.type_id_list.append(image[i][j][0])
+                    ros_msg.object_id_list.append(image[i][j][3])
+                    ros_msg.object_pos_list.append(abs_i)
+                    ros_msg.object_pos_list.append(abs_j)
+                    ros_msg.object_state_list.append(image[i][j][2])
+
+                elif image[i][j][0] == OBJECT_TO_IDX['goal']:
+                    ros_msg.type_id_list.append(image[i][j][0])
+                    ros_msg.object_id_list.append(0)
+                    ros_msg.object_pos_list.append(abs_i)
+                    ros_msg.object_pos_list.append(abs_j)
+                    ros_msg.object_state_list.append(0)
+
+        
+        ros_msg.agent_dir = self.agent_dir
+        self.observation_pub.publish(ros_msg)        
+        
+        
     def invoke(self, meta_action):
         if meta_action == self.meta_actions.explore:
             self.explore()
@@ -275,6 +427,7 @@ class HiPRLGridV0(MiniGridEnv):
             self.agent_init_pos = self.publish_ros_agent_pos()
             self.agent_init_dir = self.agent_dir
             self.agent_init_pos_pub.publish(self.agent_init_pos)
+            self.publish_observation(obs['image'])
             #self.broadcast_tf()
         self.render_counter += 1
         return img
@@ -309,6 +462,15 @@ class HiPRLGridV0(MiniGridEnv):
         ros_agent_pos.pose.orientation.w = orientation[3]
         self.agent_pos_pub.publish(ros_agent_pos)
         return ros_agent_pos
+
+    def publish_ros_goal_pos(self, pos):
+        goal_pos = PoseStamped()
+        goal_pos.header.frame_id = "map"
+        goal_pos.header.stamp = rospy.Time.now()
+        goal_pos.pose.position.x = pos[0]
+        goal_pos.pose.position.y = pos[1]
+        self.goal_pos_pub.publish(goal_pos)
+        return goal_pos
 
     def dir_to_quaternion(self):
         dir = self.agent_dir
@@ -367,6 +529,9 @@ class HiPRLGridV0(MiniGridEnv):
                     
                     elif fwd_cell.type == 'wall':
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.wall)
+
+                    elif fwd_cell.type == 'goal':
+                        self.object_map.update_cell(front, ObjectMap.ObjGridStates.goal)
                     
                     else:
                         print("update_maps: this should not happen. new type")
@@ -428,6 +593,9 @@ class HiPRLGridV0(MiniGridEnv):
                         elif object.type == 'wall':
                             self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.wall)
                         
+                        elif object.type == 'goal':
+                            self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.goal)
+                        
                         else:
                             print("update_maps: this should not happen. new type")
                             
@@ -480,7 +648,101 @@ class HiPRLGridV0(MiniGridEnv):
         # temporally, set left
         #self.explore_action_plan = [self.Actions.left] * 4
         return self.explore_action_plan
-            
+    
+    def plan(self):
+        print("Generating a Problem")
+        rospy.wait_for_service('/rosplan_problem_interface/problem_generation_server')
+        try:
+            problem_generation = rospy.ServiceProxy('/rosplan_problem_interface/problem_generation_server', Empty)
+            resp = problem_generation()
+        except rospy.ServiceException as e:
+            print("Problem Generation Service call failed: %s" %e)
+            return None
+
+        print("Planning")            
+        rospy.wait_for_service('/rosplan_planner_interface/planning_server')
+        try:
+            run_planner = rospy.ServiceProxy('/rosplan_planner_interface/planning_server', Empty)
+            resp = run_planner()
+
+        except rospy.ServiceException as e:
+            print("Planning Service call failed: %s" %e)
+            return None
+
+        print("Executing the Plan")                        
+        rospy.wait_for_service('/rosplan_parsing_interface/parse_plan')
+        try:
+            parse_plan = rospy.ServiceProxy('/rosplan_parsing_interface/parse_plan', Empty)
+            resp = parse_plan()
+        except rospy.ServiceException as e:
+            print("Plan Parsing Service call failed: %s" %e)
+            return None
+        #rospy.wait_for_service('/rosplan_parsing_interface/alert_plan_action_num')
+        #try:
+        #    alert_plan_action_num = rospy.ServiceProxy('/rosplan_parsing_interface/alert_plan_action_num', AlertPlanActionNum)
+        #    resp = alert_plan_action_num()
+        #    self.planner_action_num = resp.num_actions
+        #except rospy.ServiceException as e:
+        #    print("Plan Parsing Service call failed: %s" %e)
+       
+        while(self.complete_plan_flag is False):
+            time.sleep(0.1)
+            print("complete_plan_flag: ", self.action_execution_flag)
+        
+        print("complete_plan_flag is set to True")
+        
+        actions = self.generate_actions_from_complete_plan()
+        self.dispatch_plan_action_id = 0
+        self.prev_dispatch_plan_action_id = -1
+        self.complete_plan_flag = False
+        return actions
+    
+    def dispatch_plan(self, actions):
+        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0:
+            precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
+            if precondition_check == False:
+                print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
+                return None, None, None, None
+        action = actions[self.dispatch_plan_action_id][1].pop(0)
+        print(actions[self.dispatch_plan_action_id][0])
+        
+        obs, reward, done, info = self.step(action)
+        self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+
+        # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+        if not actions[self.dispatch_plan_action_id][1]:
+            self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+            self.dispatch_plan_action_id += 1
+
+        return obs, reward, done, info
+    
+    def check_precondition(self, item):
+        rospy.wait_for_service('/check_precondition')
+        try:
+            check_precondition = rospy.ServiceProxy('/check_precondition', ActionExecution)
+            req = ActionExecutionRequest()
+            req.name = item.name
+            req.action_id = item.action_id
+            req.parameters = copy.deepcopy(item.parameters)
+            resp = check_precondition(req)
+            return resp.success
+        except rospy.ServiceException as e:
+            print("Check Precondition Service call failed: %s" %e)
+            return False
+    
+    def process_action_effect(self, item):
+        rospy.wait_for_service('/process_action_effect')
+        try:
+            check_precondition = rospy.ServiceProxy('/process_action_effect', ActionExecution)
+            req = ActionExecutionRequest()
+            req.name = item.name
+            req.action_id = item.action_id
+            req.parameters = copy.deepcopy(item.parameters)
+            resp = check_precondition(req)
+            return resp.success
+        except rospy.ServiceException as e:
+            print("process_action_effect service call failed: %s" %e)
+            return False   
 register(
     id='MiniGrid-HiPRLGrid-v0',
     entry_point='gym_minigrid.envs:HiPRLGridV0'

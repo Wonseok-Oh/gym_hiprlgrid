@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-
 import time
 import argparse
 import numpy as np
@@ -51,10 +50,11 @@ def invoke(meta_action):
                 reset()
             else:
                 redraw(obs)
-                time.sleep(1)
+                time.sleep(0.5)
                 
     if meta_action == env.meta_actions.explore:
         actions = env.explore()
+
         for i in range(len(actions)):
             obs, reward, done, info = env.step(actions[i])
             print('step=%s, reward=%.2f' % (env.step_count, reward))
@@ -64,8 +64,40 @@ def invoke(meta_action):
                 reset()
             else:
                 redraw(obs)
-                time.sleep(1)
+                time.sleep(0.5)
+    
+    if meta_action == env.meta_actions.plan:
+        actions = env.plan()
+        empty_actions = False
+
+        if actions == None:
+            obs, reward, done, info = env.step(env._rand_elem([0, 1, 2]))
+            print('step=%s, reward=%.2f' % (env.step_count, reward))
+            reward_sum += reward
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
+                time.sleep(0.5)
         
+        else:
+            while (empty_actions == False):
+                obs, reward, done, info = env.dispatch_plan(actions)
+                if obs == None:
+                    return
+                empty_actions = not actions[0][1]
+                for i in range(len(actions)):
+                    empty_actions = empty_actions and (not actions[i][1])
+                print('step=%s, reward=%.2f' % (env.step_count, reward))
+                reward_sum += reward
+                if done:
+                    print('done!')
+                    reset()
+                else:
+                    redraw(obs)
+                    time.sleep(0.5)
+            
         #process.stop()
     print('%s, Overall reward=%.2f' % (meta_action, reward_sum))
 

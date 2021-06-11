@@ -59,6 +59,7 @@ class ObjectMap(GridMap):
         floor = 0
         unknown = -1
         wall = 100
+        goal = 50
         """
         wall = 120
         box = 100
