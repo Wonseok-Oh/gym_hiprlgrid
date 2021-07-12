@@ -2,7 +2,7 @@ from gym_minigrid.minigrid import *
 from gym_minigrid.register import register
 from gym_minigrid.envs.empty import EmptyEnv
 import numpy as np
-from SpatialMap import SpatialMap, ObjectMap
+from SpatialMap import SpatialMap, ObjectMap, BinaryMap
 import rospy
 from std_srvs.srv import Empty
 from rosplan_dispatch_msgs.srv import DispatchService
@@ -11,6 +11,9 @@ from std_msgs.msg import Int32MultiArray
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from tf import transformations
 import time, copy
+import roslaunch
+from rosparam import upload_params
+from yaml import load
 
 from find_frontier.srv import InitPos, InitPosResponse
 from hiprl_replicate.msg import Obs
@@ -21,6 +24,7 @@ from rosplan_knowledge_msgs.msg import processReset
 #import tf_conversions
 #import tf2_ros
 from math import pi
+#from builtins import None
 
 class HiPRLGridV0(MiniGridEnv):
     """
@@ -40,24 +44,43 @@ class HiPRLGridV0(MiniGridEnv):
     
 
     
-    def __init__(self, grid_size_ = 10, max_steps_ = 300, agent_view_size_ = 5, num_objects=1, num_boxes = 3):
-        self.init_node = rospy.init_node('gym_env', anonymous=True)
-        self.spatial_map_pub = rospy.Publisher("spatial_map", OccupancyGrid, queue_size = 1, latch=True)
-        self.object_map_pub = rospy.Publisher("object_map", OccupancyGrid, queue_size = 1)
-        self.agent_pos_pub = rospy.Publisher("pose",PoseStamped, queue_size = 1, latch=True)
-        self.goal_pos_pub = rospy.Publisher("goal_pose", PoseStamped, queue_size = 1, latch=True)
-        self.agent_init_pos_pub = rospy.Publisher("initial_pose", PoseStamped, queue_size = 1, latch=True)
-        self.navigation_map_pub = rospy.Publisher("navigation_map", OccupancyGrid, queue_size = 1, latch=True)
-        self.explore_action_sub = rospy.Subscriber("action_plan", Int32MultiArray, self.explore_plan_cb)
-        self.observation_pub = rospy.Publisher("observation", Obs, queue_size = 1)
-        self.reset_pub = rospy.Publisher("rosplan_knowledge_base/reset", processReset, queue_size = 1, latch=True)
+    def __init__(self, grid_size_ = 10, max_steps_ = 100, agent_view_size_ = 5, num_objects=1, num_boxes = 3, process_num = 0):
+        self.process_num = process_num
+        #self.actions = HiPRLGridV0.Actions
+        #self.action_space = spaces.Discrete(len(self.actions))
+        self.meta_actions = HiPRLGridV0.MetaActions
+        self.meta_action_space = spaces.Discrete(len(self.meta_actions))
+        
+        print('gym_env' + str(process_num))
+        if (process_num == 0):
+            self.init_node = rospy.init_node('gym_env' + str(process_num), anonymous=True)
+        self.spatial_map_pub = rospy.Publisher("spatial_map" + str(process_num), OccupancyGrid, queue_size = 1, latch=True)
+        self.object_map_pub = rospy.Publisher("object_map" + str(process_num), OccupancyGrid, queue_size = 1)
+        self.agent_pos_pub = rospy.Publisher("pose" + str(process_num), PoseStamped, queue_size = 1, latch=True)
+        self.goal_pos_pub = rospy.Publisher("goal_pose" + str(process_num), PoseStamped, queue_size = 1, latch=True)
+        self.agent_init_pos_pub = rospy.Publisher("initial_pose" + str(process_num), PoseStamped, queue_size = 1, latch=True)
+        self.navigation_map_pub = rospy.Publisher("navigation_map" + str(process_num), OccupancyGrid, queue_size = 1, latch=True)
+        self.explore_action_sub = rospy.Subscriber("action_plan" + str(process_num), Int32MultiArray, self.explore_plan_cb)
+        self.observation_pub = rospy.Publisher("observation" + str(process_num), Obs, queue_size = 1)
+        self.reset_pub = rospy.Publisher("rosplan_knowledge_base" + str(process_num)+ "/reset", processReset, queue_size = 1, latch=True)
         #self.action_service = rospy.Service("action_execution", ActionExecution, self.execute_action)
-        self.complete_plan_sub = rospy.Subscriber("/rosplan_parsing_interface/complete_plan", CompletePlan, self.complete_plan_cb)
+        self.complete_plan_sub = rospy.Subscriber("/rosplan_parsing_interface"+ str(process_num) + "/complete_plan" , CompletePlan, self.complete_plan_cb)
         # temporal abstraction: 5 timestep here (param)
         self.temp_abstr_lev = 5
-        self.coverage_reward_coeff = 1.0/26
+        self.coverage_reward_coeff = 0.002
+        self.open_reward_coeff = 0.1
+        self.carry_reward_coeff = 0.005
         self.spatial_map = SpatialMap(grid_size_, grid_size_)
-        self.object_map = ObjectMap(grid_size_, grid_size_)
+        self.object_map = ObjectMap(grid_size_, grid_size_, 3)
+        
+        self.floor_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.goal_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.wall_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.box_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.checked_box_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.ball_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        self.unknown_map_one_hot = BinaryMap(grid_size_, grid_size_)
+        
         self.prev_agent_pos = None
         self.num_objects = num_objects
         self.meta_actions = HiPRLGridV0.MetaActions
@@ -81,7 +104,7 @@ class HiPRLGridV0(MiniGridEnv):
         
         obs = super().__init__(grid_size = grid_size_, max_steps= max_steps_, agent_view_size = agent_view_size_)
         #print(obs)
-        self.update_maps(obs, None)
+        #self.update_maps(obs, None)
         #print("agent_pos: %d, %d" %(self.agent_pos[0], self.agent_pos[1]))
         #print("agent_dir: %d" % self.agent_dir)
         #print("map_size: %d x %d" %(self.spatial_map.map.info.width, self.spatial_map.map.info.height))
@@ -89,6 +112,17 @@ class HiPRLGridV0(MiniGridEnv):
 #            self.spatial_map_pub.publish(self.spatial_map.map)
 #            self.object_map_pub.publish(self.object_map.map)
 #            self.spatial_map.rate.sleep()
+
+    #def __del__(self):
+        #self.process0.stop()
+        #self.process1.stop()
+        #self.process2.stop()
+        #self.process3.stop()
+        #self.process4.stop()
+        #self.process5.stop()
+        #self.process6.stop()
+        #self.launch.stop()
+        #rospy.signal_shutdown("End class")
 
     def complete_plan_cb(self, msg):
         self.complete_plan = msg.plan
@@ -253,8 +287,18 @@ class HiPRLGridV0(MiniGridEnv):
         self.checked_receptacles = set()
         self.visited_locations = set()
         self.can_end = False
-        self.object_map = ObjectMap(self.width, self.height)
+        self.object_map = ObjectMap(self.width, self.height, 3)
         self.spatial_map = SpatialMap(self.width, self.height)
+        
+        self.floor_map_one_hot = BinaryMap(self.width, self.height)
+        self.goal_map_one_hot = BinaryMap(self.width, self.height)
+        self.wall_map_one_hot = BinaryMap(self.width, self.height)
+        self.box_map_one_hot = BinaryMap(self.width, self.height)
+        self.checked_box_map_one_hot = BinaryMap(self.width, self.height)
+        self.ball_map_one_hot = BinaryMap(self.width, self.height)
+        self.unknown_map_one_hot = BinaryMap(self.width, self.height, value = 1)
+
+        
         self.new_coverage = 0
         self.prev_agent_pos = None
         self.render_counter = 0
@@ -271,7 +315,16 @@ class HiPRLGridV0(MiniGridEnv):
         reset_msg.domain_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_mini.pddl"
         reset_msg.problem_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_problem0.pddl"
         self.reset_pub.publish(reset_msg)
-        return super().reset()
+        obs = super().reset()
+        self.update_maps(obs, None)
+        self.spatial_map_pub.publish(self.spatial_map.map)
+        self.object_map_pub.publish(self.object_map.map)
+        self.agent_init_pos = self.publish_ros_agent_pos()
+        self.agent_init_dir = self.agent_dir
+        self.agent_init_pos_pub.publish(self.agent_init_pos)
+        self.publish_observation(obs['image'])
+        return self.generate_network_input_one_hot(obs)
+        #return np.reshape(self.object_map.map.data, (self.width*self.object_map.factor, self.height*self.object_map.factor))
     
     def step(self, action):
         
@@ -293,68 +346,69 @@ class HiPRLGridV0(MiniGridEnv):
         self.publish_ros_agent_pos()
         #self.broadcast_tf()
 
-        self.spatial_map.rate.sleep()
+        #self.spatial_map.rate.sleep()
         
         # publish observation information to update knowledgebase
         self.publish_observation(obs['image'])
-        print(obs['image'])
+        #print(obs['image'])
         
         # reward for open/close action
-        if info is not None:
-            if info.can_toggle() and action == self.actions.open:
-                if info.objectId in self.closed_receptacles: # if the receptacle was closed
-                    self.opened_receptacles.add(info.objectId) # add to the opened_receptacles list
-                    self.closed_receptacles.discard(info.objectId)
-                    if info.objectId in self.checked_receptacles: # if the receptacle was checked before, penalize
-                        reward += -1.0
+        if info['fwd_cell'] is not None:
+            if info['fwd_cell'].can_toggle() and action == self.Actions.open:
+                if info['fwd_cell'].objectId in self.closed_receptacles: # if the receptacle was closed
+                    self.opened_receptacles.add(info['fwd_cell'].objectId) # add to the opened_receptacles list
+                    self.closed_receptacles.discard(info['fwd_cell'].objectId)
+                    if info['fwd_cell'].objectId in self.checked_receptacles: # if the receptacle was checked before, penalize
+                        reward += -1.0 * self.open_reward_coeff
                     else:                                    # else, if it was not checked, give reward
-                        self.checked_receptacles.add(info.objectId)
-                        reward += 1.0
+                        self.checked_receptacles.add(info['fwd_cell'].objectId)
+                        reward += 1.0 * self.open_reward_coeff
                 
-                elif info.objectId in self.opened_receptacles: # penalty for open opened_receptacles
-                    reward += -1.0
-            elif info.can_toggle() and action == self.actions.close:            
-                if info.objectId in self.opened_receptacles: # if the receptacle was opened
-                    self.closed_receptacles.add(info.objectId) # add to the closed_receptacles list
-                    self.opened_receptacles.discard(info.objectId)
+                elif info['fwd_cell'].objectId in self.opened_receptacles: # penalty for open opened_receptacles
+                    reward += -1.0 * self.open_reward_coeff
+            elif info['fwd_cell'].can_toggle() and action == self.Actions.close:            
+                if info['fwd_cell'].objectId in self.opened_receptacles: # if the receptacle was opened
+                    self.closed_receptacles.add(info['fwd_cell'].objectId) # add to the closed_receptacles list
+                    self.opened_receptacles.discard(info['fwd_cell'].objectId)
                     
-                elif info.objectId in self.closed_receptacles:
-                    reward += -1.0 # penalty for close closed_receptacles    
+                elif info['fwd_cell'].objectId in self.closed_receptacles:
+                    reward += -1.0 * self.open_reward_coeff # penalty for close closed_receptacles    
         
         
         # reward(penalize) for carrying (non)target object or 
         # just finish the episode
         if self.carrying != None:
             if self.objIdx == self.carrying.objectId:
-                reward += 1.0
+                reward += 1.0 * self.carry_reward_coeff
             else:
-                reward += -1.0
+                reward += -1.0 * self.carry_reward_coeff
 
         # If successfully dropping an object into the target
-        done = False
         u, v = self.dir_vec
         ox, oy = (self.agent_pos[0] + u, self.agent_pos[1] + v)
         tx, ty = self.target_pos
-        if action == self.actions.drop and preCarrying:
+        if action == self.Actions.drop and preCarrying:
             front_obj = self.grid.get(ox,oy)
             if front_obj.type is 'goal':
                 if abs(ox - tx) == 0 and abs(oy - ty) == 0:
                     done = True
-                    reward += 10
+                    reward += 0.5
         
         # coverage reward
         reward += self.new_coverage * self.coverage_reward_coeff
         
+        # if step num exceed 200, done
+ 
         self.prev_agent_pos = self.agent_pos
         self.prev_agent_dir = self.agent_dir
-        
+        self.new_coverage = 0
         #print("obs: ")
         #print(obs)
         
         #print(self.opened_receptacles)
         #print(self.closed_receptacles)
         #print(self.checked_receptacles)
-
+        obs = self.generate_network_input_one_hot(obs)
         return obs, reward, done, info
 
     def publish_observation(self, image):
@@ -405,17 +459,134 @@ class HiPRLGridV0(MiniGridEnv):
         self.observation_pub.publish(ros_msg)        
         
         
-    def invoke(self, meta_action):
+    def invoke(self, meta_action, render = False):
+        reward_sum = 0
+        done = False
+        info = {'fwd_cell': None}
+        if meta_action == self.meta_actions.scan:
+            for i in range(4):
+                obs, reward, done, info = self.step(self.Actions.left)
+                print('step=%s, reward=%.2f' % (self.step_count, reward))
+                if render:
+                    self.render()
+                reward_sum += reward
+                if done:
+                    print('done!')
+                    break
+                #else:
+                    #redraw(obs)
+                    #time.sleep(0.1)
+            
+            if reward_sum == -0.04:
+                reward_sum += -0.5
+                done = True
+                
         if meta_action == self.meta_actions.explore:
-            self.explore()
-        elif meta_action == self.meta_actions.plan:
-            self.plan()
-        elif meta_action == self.meta_actions.scan:
-            self.scan()
-        elif meta_action == self.meta_actions.stop:
-            self.stop()
-        else:
-            print('this meta_action should not happen')
+            actions = self.explore()
+    
+            for i in range(len(actions)):
+                obs, reward, done, info = self.step(actions[i])
+                if render:
+                    self.render()
+                print('step=%s, reward=%.2f' % (self.step_count, reward))
+                reward_sum += reward
+                if done:
+                    print('done!')
+                    break
+                #else:
+                    #redraw(obs)
+                    #time.sleep(0.5)
+            
+            if len(actions) <= 1 or reward_sum == -0.01:
+                obs = self.gen_obs()
+                reward_sum += -0.5
+                done = True
+                
+        if meta_action == self.meta_actions.plan:
+            actions = self.plan()
+    
+            if actions == None or len(actions) == 0:
+                obs, reward, done, info = self.step(self.Actions.pickup)
+                if render:
+                    self.render()
+                done = True
+                reward_sum += -0.5
+                print('step=%s, reward=%.2f' % (self.step_count, reward))
+                reward_sum += reward
+                if done:
+                    print('done!')
+                #else:
+                    #redraw(obs)
+                    #time.sleep(0.5)
+            
+            else:
+                len_actions = 1
+                while (len_actions != 0):
+                    obs, reward, done, info = self.dispatch_plan(actions)
+                    if render:
+                        self.render()
+                    len_actions = 0
+                    if reward == None: # invalid plan
+                        obs = self.gen_obs()
+                        reward= 0
+                        done = False
+                        info = {'fwd_cell': None}
+                        break
+                    for i in range(len(actions)):
+                        len_actions = len_actions + len(actions[i][1])
+                    print('step=%s, reward=%.2f' % (self.step_count, reward))
+                    reward_sum += reward
+                    if done:
+                        print('done!')
+                        break
+                    #else:
+                        #redraw(obs)
+                        #time.sleep(0.5)
+                
+            #process.stop()
+        obs = self.gen_obs()
+        # map = self.generate_network_input(obs)
+        map = self.generate_network_input_one_hot(obs)
+        #print("map: ")
+        #print(map)
+        #print('%s, Overall reward=%.2f' % (meta_action, reward_sum))
+        #print("{}, {}, {}, {}, {}".format(type(obs), type(reward_sum), type(done), type(info), type(map)))
+        return map, reward_sum, done, info #, map
+
+    def generate_network_input_one_hot(self, obs):
+        temp_ball_map = copy.deepcopy(self.ball_map_one_hot)
+        map = np.zeros(shape=(50, 50, 7), dtype=np.uint8)
+
+        obs_grid, _ = Grid.decode(obs['image'])
+        object = obs_grid.get(obs_grid.width//2, obs_grid.height-1)
+        wx, wy = self.get_world_coordinate(obs_grid.width//2, obs_grid.height-1)
+        if np.array_equal(self.agent_pos, np.array([wx,wy])):
+            wy = self.spatial_map.map.info.height - wy - 1
+            #self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free
+            if object is not None and object.type == 'ball':
+                temp_ball_map.update_cell(np.array([wx, wy]), 1)
+        map[:,:,0] = copy.deepcopy(np.reshape(temp_ball_map.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))        
+        map[:,:,1] = copy.deepcopy(np.reshape(self.box_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        map[:,:,2] = copy.deepcopy(np.reshape(self.checked_box_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        map[:,:,3] = copy.deepcopy(np.reshape(self.floor_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        map[:,:,4] = copy.deepcopy(np.reshape(self.goal_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        map[:,:,5] = copy.deepcopy(np.reshape(self.unknown_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        map[:,:,6] = copy.deepcopy(np.reshape(self.wall_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
+        return map
+        
+    def generate_network_input(self, obs):
+        map = copy.deepcopy(self.object_map)
+        #map = np.reshape(self.object_map.map.data, (self.width*self.object_map.factor, self.height*self.object_map.factor))
+        obs_grid, _ = Grid.decode(obs['image'])
+        object = obs_grid.get(obs_grid.width//2, obs_grid.height-1)
+        wx, wy = self.get_world_coordinate(obs_grid.width//2, obs_grid.height-1)
+        if np.array_equal(self.agent_pos, np.array([wx,wy])):
+            wy = self.spatial_map.map.info.height - wy - 1
+            #self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free
+            if object is not None and object.type == 'ball':
+                map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.ball, center_only = True)
+
+        return np.reshape(map.map.data, (self.width*self.object_map.factor, self.height*self.object_map.factor))
     
     def render(self, mode = 'human', close = False, highlight = True, tile_size = TILE_PIXELS):
         img = super().render(mode, close, highlight, tile_size)
@@ -451,7 +622,7 @@ class HiPRLGridV0(MiniGridEnv):
         ros_agent_pos = PoseStamped()
         ros_agent_pos.header.frame_id = "map"
         ros_agent_pos.header.stamp = rospy.Time.now()
-        print("self.agent_pos: %d, %d" % (self.agent_pos[0], self.agent_pos[1]) )
+        #print("self.agent_pos: %d, %d" % (self.agent_pos[0], self.agent_pos[1]) )
         ros_agent_pos.pose.position.x = (self.agent_pos[0]+0.5) * self.spatial_map.map.info.resolution 
         ros_agent_pos.pose.position.y = (self.spatial_map.map.info.height - self.agent_pos[1] - 1 + 0.5) * self.spatial_map.map.info.resolution
         ros_agent_pos.pose.position.z = 0
@@ -492,8 +663,10 @@ class HiPRLGridV0(MiniGridEnv):
     
     # now, spatial map update algorithm is done    
     def update_maps(self, obs, action):
+        #print(obs['image'])
+        #print(self.agent_dir)
         if np.array_equal(self.prev_agent_pos, self.agent_pos) and np.array_equal(self.prev_agent_dir, self.agent_dir): # no movement
-            if action == self.actions.open or action == self.actions.pickup or action == self.actions.drop:
+            if action == self.Actions.open or action == self.Actions.pickup or action == self.Actions.drop:
                 front = self.front_pos
                 fwd_cell = self.grid.get(front[0], front[1])
 
@@ -502,37 +675,50 @@ class HiPRLGridV0(MiniGridEnv):
                     if 0 <= front[0] and front[0] <= self.spatial_map.map.info.width-1 and 0 <= front[1] and front[1] <= self.spatial_map.map.info.height-1:
                         self.spatial_map.update_cell(front, SpatialMap.OccGridStates.free)
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.floor)
-                        
+                        self.floor_map_one_hot.update_cell(front, 1)
+                        self.unknown_map_one_hot.update_cell(front, 0)
                 else:
                     
                     # update object map
                     if fwd_cell.type == 'box':
-                        print("fwd_cell.objectId: %d" % fwd_cell.objectId)
+                        #print("fwd_cell.objectId: %d" % fwd_cell.objectId)
                         if fwd_cell.isOpen == True:
                             if fwd_cell.contains is not None:
                                 if fwd_cell.contains.type == 'ball':
                                     self.object_map.update_cell(front, ObjectMap.ObjGridStates.ball, center_only = True)
+                                    self.ball_map_one_hot.update_cell(front, 1)
+                                    self.unknown_map_one_hot.update_cell(front, 0)
+
                                 elif fwd_cell.contains.type == 'key':
                                     self.object_map.update_cell(front, ObjectMap.ObjGridStates.key, center_only = True)
                             else:
-                                self.object_map.update_cell(front, ObjectMap.ObjGridStates.box)
-                        
+                                self.object_map.update_cell(front, ObjectMap.ObjGridStates.checked_box)
+                                self.checked_box_map_one_hot.update_cell(front, 1)
+                                self.unknown_map_one_hot.update_cell(front, 0)
+
                         elif fwd_cell.objectId not in self.checked_receptacles:
                             self.object_map.update_cell(front, ObjectMap.ObjGridStates.box)
-                        
-                    
+                            self.box_map_one_hot.update_cell(front, 1)
+                            self.unknown_map_one_hot.update_cell(front, 0)
+                            
                     elif fwd_cell.type == 'key':
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.key, center_only = True)
+                        self.unknown_map_one_hot.update_cell(front, 0)
                         
                     elif fwd_cell.type == 'ball':
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.ball, center_only = True)
-                    
+                        self.ball_map_one_hot.update_cell(front, 1)
+                        self.unknown_map_one_hot.update_cell(front, 0)
+                        
                     elif fwd_cell.type == 'wall':
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.wall)
-
+                        self.wall_map_one_hot.update_cell(front, 1)
+                        self.unknown_map_one_hot.update_cell(front, 0)
+                        
                     elif fwd_cell.type == 'goal':
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.goal)
-                    
+                        self.goal_map_one_hot.update_cell(front, 1)
+                        self.unknown_map_one_hot.update_cell(front, 0)
                     else:
                         print("update_maps: this should not happen. new type")
                 
@@ -553,7 +739,8 @@ class HiPRLGridV0(MiniGridEnv):
                     object = obs_grid.get(i,j)
                     wx, wy = self.get_world_coordinate(i,j)
                     if np.array_equal(self.agent_pos, np.array([wx,wy])):
-                        wy = self.spatial_map.map.info.height - wy - 1 
+                        
+                        wy = self.spatial_map.map.info.height - wy - 1
                         self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free)
                         continue
                     wy = self.spatial_map.map.info.height - wy - 1 
@@ -562,7 +749,8 @@ class HiPRLGridV0(MiniGridEnv):
                         if 0 <= wx and wx <= self.spatial_map.map.info.width-1 and 0 <= wy and wy <= self.spatial_map.map.info.height-1:
                             self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free)
                             self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.floor)
-                            
+                            self.floor_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                            self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                     else:
                         # update object map
                         if object.type == 'box':
@@ -574,36 +762,49 @@ class HiPRLGridV0(MiniGridEnv):
                                 if object.contains is not None:
                                     if object.contains.type == 'ball':
                                         self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.ball, center_only = True)
+                                        self.ball_map_one_hot.update_cell(np.array[wx,wy], 1)
+                                        self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                                     elif object.contains.type == 'key':
                                         self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.key, center_only = True)
                                 else:
                                     self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.box)
-                            
+                                    self.box_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                                    self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                             else:
                                 self.closed_receptacles.add(object.objectId)
                                 self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.box)
-                                
+                                self.box_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                                self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                             
                         elif object.type == 'key':
                             self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.key, center_only = True)
                             
                         elif object.type == 'ball':
                             self.object_map.update_cell(np.array([wx,wy]), ObjectMap.ObjGridStates.ball, center_only = True)
-                        
+                            self.ball_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                            self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                         elif object.type == 'wall':
                             self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.wall)
-                        
+                            self.wall_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                            self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                         elif object.type == 'goal':
                             self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.goal)
-                        
+                            self.goal_map_one_hot.update_cell(np.array([wx,wy]), 1)
+                            self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
                         else:
                             print("update_maps: this should not happen. new type")
                             
+                        
+                        index = self.spatial_map.xy_to_index(wx, wy)
+                        if self.spatial_map.map.data[index] == SpatialMap.OccGridStates.unknown:
+                            self.new_coverage += 1
+
                         # update spatial map
                         if object.can_overlap():
                             self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free)
                         else:
                             self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.occupied)
+
                 
         self.spatial_map.map.header.stamp = rospy.Time.now()
         self.object_map.map.header.stamp = rospy.Time.now()                   
@@ -615,10 +816,10 @@ class HiPRLGridV0(MiniGridEnv):
         self.step(self.Actions.left)
 
     def explore(self):
-        rospy.wait_for_service('init_pose_update')
+        rospy.wait_for_service('init_pose_update' + str(self.process_num))
         result = False
         try:
-            init_pose_update = rospy.ServiceProxy('init_pose_update', InitPos)
+            init_pose_update = rospy.ServiceProxy('init_pose_update' + str(self.process_num), InitPos)
             result = init_pose_update(self.agent_init_pos.pose.position.x, self.agent_init_pos.pose.position.y, self.agent_init_dir)
             
         except rospy.ServiceException as e:
@@ -626,7 +827,7 @@ class HiPRLGridV0(MiniGridEnv):
         print("init_pose_update: ", result)
 
         try:
-            pose_update = rospy.ServiceProxy('pose_update', InitPos)
+            pose_update = rospy.ServiceProxy('pose_update' + str(self.process_num), InitPos)
             x = (self.agent_pos[0] + 0.5) * self.spatial_map.map.info.resolution
             y = (self.spatial_map.map.info.height - self.agent_pos[1] - 0.5) * self.spatial_map.map.info.resolution
             result = pose_update(x, y, self.agent_dir)
@@ -637,9 +838,13 @@ class HiPRLGridV0(MiniGridEnv):
     
         # Execute mapConvert in findFrontier, which generates plan
         self.navigation_map_pub.publish(self.spatial_map.map)
+        counter = 0
         while(self.explore_action_set is False):
-            print(self.explore_action_set)
+            print("explore_action_set: ", self.explore_action_set)
+            counter = counter + 1
             time.sleep(0.1)
+            if counter > 10:
+                return []
             #block until explore plan is subscribed and updated
         print("plan: ", self.explore_action_plan)
         self.explore_action_set = False
@@ -651,18 +856,18 @@ class HiPRLGridV0(MiniGridEnv):
     
     def plan(self):
         print("Generating a Problem")
-        rospy.wait_for_service('/rosplan_problem_interface/problem_generation_server')
+        rospy.wait_for_service('/rosplan_problem_interface'+ str(self.process_num) + '/problem_generation_server')
         try:
-            problem_generation = rospy.ServiceProxy('/rosplan_problem_interface/problem_generation_server', Empty)
+            problem_generation = rospy.ServiceProxy('/rosplan_problem_interface' + str(self.process_num) + '/problem_generation_server', Empty)
             resp = problem_generation()
         except rospy.ServiceException as e:
             print("Problem Generation Service call failed: %s" %e)
             return None
 
         print("Planning")            
-        rospy.wait_for_service('/rosplan_planner_interface/planning_server')
+        rospy.wait_for_service('/rosplan_planner_interface' + str(self.process_num) + '/planning_server')
         try:
-            run_planner = rospy.ServiceProxy('/rosplan_planner_interface/planning_server', Empty)
+            run_planner = rospy.ServiceProxy('/rosplan_planner_interface' + str(self.process_num) + '/planning_server', Empty)
             resp = run_planner()
 
         except rospy.ServiceException as e:
@@ -670,9 +875,9 @@ class HiPRLGridV0(MiniGridEnv):
             return None
 
         print("Executing the Plan")                        
-        rospy.wait_for_service('/rosplan_parsing_interface/parse_plan')
+        rospy.wait_for_service('/rosplan_parsing_interface' + str(self.process_num) + '/parse_plan')
         try:
-            parse_plan = rospy.ServiceProxy('/rosplan_parsing_interface/parse_plan', Empty)
+            parse_plan = rospy.ServiceProxy('/rosplan_parsing_interface' + str(self.process_num) + '/parse_plan', Empty)
             resp = parse_plan()
         except rospy.ServiceException as e:
             print("Plan Parsing Service call failed: %s" %e)
@@ -684,11 +889,15 @@ class HiPRLGridV0(MiniGridEnv):
         #    self.planner_action_num = resp.num_actions
         #except rospy.ServiceException as e:
         #    print("Plan Parsing Service call failed: %s" %e)
-       
+        counter = 0
         while(self.complete_plan_flag is False):
             time.sleep(0.1)
+            counter = counter + 1
             print("complete_plan_flag: ", self.action_execution_flag)
-        
+            if counter > 10:
+                self.dispatch_plan_action_id = 0
+                self.prev_dispatch_plan_action_id = -1
+                return None
         print("complete_plan_flag is set to True")
         
         actions = self.generate_actions_from_complete_plan()
@@ -698,13 +907,16 @@ class HiPRLGridV0(MiniGridEnv):
         return actions
     
     def dispatch_plan(self, actions):
-        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0:
+        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0 and len(actions) > 0:
             precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
             if precondition_check == False:
                 print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
+                self.dispatch_plan_action_id = 0
+                self.prev_dispatch_plan_action_id = -1
                 return None, None, None, None
+            
         action = actions[self.dispatch_plan_action_id][1].pop(0)
-        print(actions[self.dispatch_plan_action_id][0])
+        #print(actions[self.dispatch_plan_action_id][0])
         
         obs, reward, done, info = self.step(action)
         self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
@@ -717,9 +929,9 @@ class HiPRLGridV0(MiniGridEnv):
         return obs, reward, done, info
     
     def check_precondition(self, item):
-        rospy.wait_for_service('/check_precondition')
+        rospy.wait_for_service('/check_precondition' + str(self.process_num))
         try:
-            check_precondition = rospy.ServiceProxy('/check_precondition', ActionExecution)
+            check_precondition = rospy.ServiceProxy('/check_precondition' + str(self.process_num), ActionExecution)
             req = ActionExecutionRequest()
             req.name = item.name
             req.action_id = item.action_id
@@ -731,9 +943,9 @@ class HiPRLGridV0(MiniGridEnv):
             return False
     
     def process_action_effect(self, item):
-        rospy.wait_for_service('/process_action_effect')
+        rospy.wait_for_service('/process_action_effect' + str(self.process_num))
         try:
-            check_precondition = rospy.ServiceProxy('/process_action_effect', ActionExecution)
+            check_precondition = rospy.ServiceProxy('/process_action_effect' + str(self.process_num), ActionExecution)
             req = ActionExecutionRequest()
             req.name = item.name
             req.action_id = item.action_id
@@ -747,6 +959,80 @@ register(
     id='MiniGrid-HiPRLGrid-v0',
     entry_point='gym_minigrid.envs:HiPRLGridV0'
 )
+
+"""
+print(self.observation_space)
+        data_path = '/home/morin/catkin_ws/src/hiprl_replicate/pddl/'
+        domain_path = data_path + 'hiprl_mini.pddl'
+        problem0_path = data_path + 'hiprl_problem0.pddl'
+        problem_path = data_path + 'problem.pddl'
+        planner_command = '/home/morin/catkin_ws/src/rosplan/rosplan_planning_system/common/bin/popf2 DOMAIN PROBLEM /home/morin/catkin_ws/src/hiprl_replicate/pddl/plan0.pddl'
+        
+        # objmap_to_image converter launch
+        file0_package = 'find_frontier'
+        file0_executable = 'objmap_to_image_converter'
+        node0 = roslaunch.core.Node(file0_package, file0_executable, name = 'objmap_to_image_converter' + str(process_num), args = str(process_num), output='screen')
+        self.launch = roslaunch.scriptapi.ROSLaunch()
+        self.launch.start()
+        self.process0 = self.launch.launch(node0)
+        
+        # hiprl_explore launch
+        file1_package = 'find_frontier'
+        file1_executable = 'find_frontier_node'
+        node1 = roslaunch.core.Node(file1_package, file1_executable, name = 'hiprl_explore' + str(process_num), args = str(process_num), output='screen')
+        f = open('/home/morin/catkin_ws/src/find_frontier/param/global_costmap' + str(process_num) + '.yaml', 'r')
+        yaml_file = load(f)
+        f.close()
+        upload_params('/hiprl_explore' + str(process_num) + '/', yaml_file)
+        self.process1 = self.launch.launch(node1)
+        rospy.set_param('use_sim_time', False)
+        
+        # knowledge manager launch
+        file2_package = 'rosplan_knowledge_base'
+        file2_executable = 'knowledgeBase'
+        node2 = roslaunch.core.Node(file2_package, file2_executable, name = 'rosplan_knowledge_base' + str(process_num), args = str(process_num), output='screen')
+        rospy.set_param('rosplan_knowledge_base' + str(process_num) + '/domain_path', domain_path)
+        rospy.set_param('rosplan_knowledge_base' + str(process_num) + '/problem_path', problem0_path)
+        rospy.set_param('rosplan_knowledge_base' + str(process_num) + '/use_unknowns', False)
+        self.process2 = self.launch.launch(node2)
+        
+        file3_package = 'rosplan_planning_system'
+        file3_executable = 'problemInterface'
+        node3 = roslaunch.core.Node(file3_package, file3_executable, name = 'rosplan_problem_interface' + str(process_num), args = str(process_num), output='screen')
+        rospy.set_param('rosplan_problem_interface' + str(process_num) + '/knowledge_base', 'rosplan_knowledge_base' + str(process_num))
+        rospy.set_param('rosplan_problem_interface' + str(process_num) + '/domain_path', domain_path)
+        rospy.set_param('rosplan_problem_interface' + str(process_num) + '/problem_path', problem_path)
+        rospy.set_param('rosplan_problem_interface' + str(process_num) + '/problem_topic', 'problem_instance')
+        self.process3 = self.launch.launch(node3)
+        
+        file4_package = 'hiprl_replicate'
+        file4_executable = 'knowledge_update_node'
+        node4 = roslaunch.core.Node(file4_package, file4_executable, name = 'rosplan_knowledge_update_node' + str(process_num), args = str(process_num), output='screen')
+        rospy.set_param('rosplan_knowledge_update_node' + str(process_num) + '/knowledge_base', 'rosplan_knowledge_base' + str(process_num))
+        self.process4 = self.launch.launch(node4)
+        
+        # planner launch
+        file5_package = 'rosplan_planning_system'
+        file5_executable = 'popf_planner_interface'
+        node5 = roslaunch.core.Node(file5_package, file5_executable, name = 'rosplan_planner_interface' + str(process_num), args = str(process_num), output='screen')
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/use_problem_topic', True)
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/problem_topic', 'rosplan_problem_interface' + str(process_num) + '/problem_instance')
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/planner_topic', 'planner_output')
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/domain_path', domain_path)
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/problem_path', problem_path)
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/data_path', data_path)
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/planner_interface', 'popf_planner_interface')
+        rospy.set_param('rosplan_planner_interface' + str(process_num) + '/planner_command', planner_command)
+        self.process5 = self.launch.launch(node5)
+                
+        file6_package = 'rosplan_planning_system'
+        file6_executable = 'pddl_simple_plan_parser'
+        node6 = roslaunch.core.Node(file6_package, file6_executable, name = 'rosplan_parsing_interface' + str(process_num), args = str(process_num), output='screen')
+        rospy.set_param('rosplan_parsing_interface' + str(process_num) + '/knowledge_base', 'rosplan_knowledge_base' + str(process_num))
+        rospy.set_param('rosplan_parsing_interface' + str(process_num) + '/planner_topic', 'rosplan_planner_interface' + str(process_num) + '/planner_output')
+        rospy.set_param('rosplan_parsing_interface' + str(process_num) + '/plan_topic', 'complete_plan')
+        self.process6 = self.launch.launch(node6)
+"""
 
 """ For advanced sim
         # Place random objects in the world

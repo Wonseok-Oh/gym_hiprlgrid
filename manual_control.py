@@ -70,7 +70,7 @@ def invoke(meta_action):
         actions = env.plan()
         empty_actions = False
 
-        if actions == None:
+        if actions == None or len(actions) == 0:
             obs, reward, done, info = env.step(env._rand_elem([0, 1, 2]))
             print('step=%s, reward=%.2f' % (env.step_count, reward))
             reward_sum += reward
@@ -175,9 +175,14 @@ parser.add_argument(
     action='store_true'
 )
 
-args = parser.parse_args()
-env = gym.make(args.env)
+parser.add_argument(
+    '--num_envs',
+    type = int,
+    default = 0,
+    help="number of environments to run in parallel")
 
+args = parser.parse_args()
+env = gym.make(args.env, process_num = args.num_envs)
 if args.agent_view:
     env = RGBImgPartialObsWrapper(env)
     env = ImgObsWrapper(env)

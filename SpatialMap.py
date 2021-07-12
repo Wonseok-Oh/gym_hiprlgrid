@@ -39,6 +39,9 @@ class GridMap:
         self.spatial_map.header.stamp = rospy.Time.now()
         self.map_pub.publish(self.spatial_map)
 
+
+
+
 class SpatialMap(GridMap):
     class OccGridStates(IntEnum):
         free = 0
@@ -55,7 +58,8 @@ class ObjectMap(GridMap):
     class ObjGridStates(IntEnum):
         box = 110
         ball = -2
-        key = -120
+        key = 80
+        checked_box = -120
         floor = 0
         unknown = -1
         wall = 100
@@ -68,8 +72,8 @@ class ObjectMap(GridMap):
         floor = 0
         unknown = -1
         """
-    def __init__(self, width, height):
-        self.factor = 3 # must be odd
+    def __init__(self, width, height, factor):
+        self.factor = factor # must be odd
         super().__init__(width * self.factor, height * self.factor)
         self.map.data = np.full(width*height*self.factor*self.factor, self.ObjGridStates.unknown)
 
@@ -148,3 +152,20 @@ class ObjectMap(GridMap):
     def update_center(self, center_index, value):
         self.map.data[center_index] = value
         
+class BinaryMap(ObjectMap):
+    def __init__(self, width, height, value = 0):
+        self.factor = 5 # must be odd
+        super().__init__(width, height, self.factor)
+        self.map.info.resolution = 1
+        self.map.data = np.full(width*height*self.factor*self.factor, value)
+        #print(self.map.info.width)
+        
+    def update_surrounding(self, index, value, center_only = False):
+        center_index = (index // (self.map.info.width//self.factor)) * self.map.info.width*self.factor + (self.factor//2) * self.map.info.width + (index % (self.map.info.width//self.factor)) * self.factor + (self.factor//2)
+        #print("index: {}, center_index: {}".format(index, center_index))
+        near_5by5 = []
+        for i in range(25):
+            near_5by5.append(center_index + self.map.info.width*(i//5-2) + (i%5-2))
+            
+        for j in range(25):
+            self.map.data[near_5by5[j]] = value

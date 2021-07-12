@@ -729,12 +729,12 @@ class MiniGridEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(self.agent_view_size, self.agent_view_size, 3),
+            shape=(self.width*5, self.height*5, 7),
             dtype='uint8'
         )
-        self.observation_space = spaces.Dict({
-            'image': self.observation_space
-        })
+        #self.observation_space = spaces.Dict({
+        #    'image': self.observation_space
+        #})
 
         # Range of possible rewards
         self.reward_range = (0, 1)
@@ -1238,7 +1238,7 @@ class MiniGridEnv(gym.Env):
             done = True
 
         obs = self.gen_obs()
-
+        info = {'fwd_cell': info}
         return obs, reward, done, info
 
     def gen_obs_grid(self):
