@@ -566,11 +566,57 @@ class Grid:
         for j in range(0, self.height):
             for i in range(0, self.width):
                 cell = self.get(i, j)
-
                 agent_here = np.array_equal(agent_pos, (i, j))
+                
                 tile_img = Grid.render_tile(
                     cell,
                     agent_dir=agent_dir if agent_here else None,
+                    highlight=highlight_mask[i, j],
+                    tile_size=tile_size
+                )
+
+                ymin = j * tile_size
+                ymax = (j+1) * tile_size
+                xmin = i * tile_size
+                xmax = (i+1) * tile_size
+                img[ymin:ymax, xmin:xmax, :] = tile_img
+
+        return img
+
+    def render_multi(
+        self,
+        tile_size,
+        agents_pos=None,
+        agents_dir=None,
+        highlight_mask=None
+    ):
+        """
+        Render this grid at a given scale
+        :param r: target renderer object
+        :param tile_size: tile size in pixels
+        """
+        if highlight_mask is None:
+            highlight_mask = np.zeros(shape=(self.width, self.height), dtype=np.bool)
+
+        # Compute the total grid size
+        width_px = self.width * tile_size
+        height_px = self.height * tile_size
+
+        img = np.zeros(shape=(height_px, width_px, 3), dtype=np.uint8)
+
+        # Render the grid
+        for j in range(0, self.height):
+            for i in range(0, self.width):
+                cell = self.get(i, j)
+                agent_here = False
+                for k in range(len(agents_pos)):
+                    agent_here = agent_here or np.array_equal(agents_pos[k], (i, j))
+                    if agent_here:
+                        break
+                
+                tile_img = Grid.render_tile(
+                    cell,
+                    agent_dir=agents_dir[k] if agent_here else None,
                     highlight=highlight_mask[i, j],
                     tile_size=tile_size
                 )
@@ -729,13 +775,19 @@ class MiniGridEnv(gym.Env):
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(self.width*5, self.height*5, 7),
+            shape=(self.width*self.height*7,),
             dtype='uint8'
         )
+        #self.observation_space = spaces.Box(
+        #    low=0,
+        #    high=255,
+        #    shape=(self.agent_view_size, self.agent_view_size, 3),
+        #    dtype='uint8'
+        #)
         #self.observation_space = spaces.Dict({
         #    'image': self.observation_space
         #})
-
+        
         # Range of possible rewards
         self.reward_range = (0, 1)
 
@@ -1017,6 +1069,7 @@ class MiniGridEnv(gym.Env):
 
     def place_agent(
         self,
+        id = 0,
         top=None,
         size=None,
         rand_dir=True,

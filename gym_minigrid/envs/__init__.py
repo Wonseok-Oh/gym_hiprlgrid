@@ -20,3 +20,5 @@ from gym_minigrid.envs.lavagap import *
 from gym_minigrid.envs.dynamicobstacles import *
 from gym_minigrid.envs.distshift import *
 from gym_minigrid.envs.hiprlgrid import *
+from gym_minigrid.envs.my_hiprlgrid import *
+from gym_minigrid.envs.multi_hiprlgrid import *

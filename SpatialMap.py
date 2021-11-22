@@ -39,8 +39,9 @@ class GridMap:
         self.spatial_map.header.stamp = rospy.Time.now()
         self.map_pub.publish(self.spatial_map)
 
-
-
+    def get_value(self, pos):
+        i = self.xy_to_index(pos[0], pos[1])
+        return self.map.data[i]
 
 class SpatialMap(GridMap):
     class OccGridStates(IntEnum):
@@ -53,6 +54,38 @@ class SpatialMap(GridMap):
         self.factor = 3
         self.map.info.resolution = self.factor
         self.map.data = np.full(width*height, self.OccGridStates.unknown)
+
+class BinaryMap_MLP(GridMap):
+    def __init__(self, width, height, value = 0):
+        super().__init__(width, height)
+        self.factor = 3
+        self.map.info.resolution = self.factor
+        self.map.data = np.full(width*height, value)
+
+class ObjectMap_MLP(GridMap):
+    class ObjGridStates(IntEnum):
+        unknown = 0
+        floor = 1
+        goal = 2
+        box = 4
+        ball = 8
+        checked_box = 16
+        wall = 32
+        agent = 64
+    
+    def __init__(self, width, height, value = 0):
+        super().__init__(width, height)
+        self.factor = 3
+        self.map.info.resolution = self.factor
+        self.map.data = np.full(width*height, value)
+
+    def update_agent_pos(self, agent_pos):
+        i = self.xy_to_index(pos[0], pos[1])
+        self.map.data[i] = self.map.data[i] + self.ObjGridStates.agent
+        
+    def remove_agent(self, pos):
+        i = self.xy_to_index(pos[0], pos[1])
+        self.map.data[i] = self.map.data[i] - self.ObjGridStates.agent
 
 class ObjectMap(GridMap):
     class ObjGridStates(IntEnum):

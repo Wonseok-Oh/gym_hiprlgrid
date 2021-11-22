@@ -13,7 +13,7 @@ from geometry_msgs.msg import PoseStamped
 def redraw(img):
     if not args.agent_view:
         img = env.render('rgb_array', tile_size=args.tile_size)
-
+    print(img.shape)
     window.show_img(img)
 
 def reset():
@@ -40,66 +40,126 @@ def step(action):
 
 def invoke(meta_action):
     reward_sum = 0
-    if meta_action == env.meta_actions.scan:
-        for i in range(4):
-            obs, reward, done, info = env.step(env.actions.left)
-            print('step=%s, reward=%.2f' % (env.step_count, reward))
-            reward_sum += reward
-            if done:
-                print('done!')
-                reset()
-            else:
-                redraw(obs)
-                time.sleep(0.5)
-                
-    if meta_action == env.meta_actions.explore:
-        actions = env.explore()
-
-        for i in range(len(actions)):
-            obs, reward, done, info = env.step(actions[i])
-            print('step=%s, reward=%.2f' % (env.step_count, reward))
-            reward_sum += reward
-            if done:
-                print('done!')
-                reset()
-            else:
-                redraw(obs)
-                time.sleep(0.5)
-    
-    if meta_action == env.meta_actions.plan:
-        actions = env.plan()
-        empty_actions = False
-
-        if actions == None or len(actions) == 0:
-            obs, reward, done, info = env.step(env._rand_elem([0, 1, 2]))
-            print('step=%s, reward=%.2f' % (env.step_count, reward))
-            reward_sum += reward
-            if done:
-                print('done!')
-                reset()
-            else:
-                redraw(obs)
-                time.sleep(0.5)
+    print("current_mode: {}".format(env.mode))
+    if meta_action == env.meta_actions.keep_previous:
+        if env.mode == env.Option_mode.init:
+            reward_sum = -0.5
+            done = True
         
-        else:
-            while (empty_actions == False):
-                obs, reward, done, info = env.dispatch_plan(actions)
-                if obs == None:
-                    return
-                empty_actions = not actions[0][1]
-                for i in range(len(actions)):
-                    empty_actions = empty_actions and (not actions[i][1])
+        elif env.mode == env.Option_mode.explore:
+            if len(env.explore_action_list) <= 0:
+                env.explore_action_list = env.explore()
+            if len(env.explore_action_list) > 0:
+                action = env.explore_action_list.pop(0)
+                obs, reward, done, info = env.step(action)
                 print('step=%s, reward=%.2f' % (env.step_count, reward))
                 reward_sum += reward
+
                 if done:
                     print('done!')
                     reset()
                 else:
                     redraw(obs)
-                    time.sleep(0.5)
+
+            
+        elif env.mode == env.Option_mode.scan:
+            obs, reward, done, info = env.step(env.Actions.left)
+            print('step=%s, reward=%.2f' % (env.step_count, reward))
+            reward_sum += reward
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
+            
+        elif env.mode == env.Option_mode.plan:
+            if env.plan_action_list == None or len(env.plan_action_list) == 0:
+                return invoke(env.meta_actions.plan)
+            else:
+                len_actions = 0
+                for i in range(len(env.plan_action_list)):
+                    len_actions = len_actions + len(env.plan_action_list[i][1])
+                if len_actions > 0:
+                    obs, reward, done, info = env.dispatch_plan(env.plan_action_list)
+                    if reward == None: # invalid plan
+                        obs = env.gen_obs()
+                        reward= 0
+                        done = False
+                        info = {'fwd_cell': None}
+                            
+                    print('step=%s, reward=%.2f' % (env.step_count, reward))
+                    reward_sum += reward
+                    if done:
+                        print('done!')
+                        reset()
+                    else:
+                        redraw(obs)
+                        
+    elif meta_action == env.meta_actions.scan:
+        env.mode= env.Option_mode.scan
+        obs, reward, done, info = env.step(env.Actions.left)
+        print('step=%s, reward=%.2f' % (env.step_count, reward))
+        reward_sum += reward
+        if done:
+            print('done!')
+            reset()
+        else:
+            redraw(obs)
+                
+    elif meta_action == env.meta_actions.explore:
+        env.mode = env.Option_mode.explore
+        env.explore_action_list = env.explore()
+        if len(env.explore_action_list) > 1:
+            action = env.explore_action_list.pop(0)
+            obs, reward, done, info = env.step(action)
+            print('step=%s, reward=%.2f' % (env.step_count, reward))
+            reward_sum += reward
+
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
+    
+    elif meta_action == env.meta_actions.plan:
+        env.mode = env.Option_mode.plan
+        env.plan_action_list = env.plan()
+    
+        if env.plan_action_list == None or len(env.plan_action_list) == 0:
+            obs, reward, done, info = env.step(env.Actions.pickup)
+
+            done = True
+            print('step=%s, reward=%.2f' % (env.step_count, reward))
+            reward_sum += reward
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
+        
+        else:
+            len_actions = 0
+            for i in range(len(env.plan_action_list)):
+                len_actions = len_actions + len(env.plan_action_list[i][1])
+            if len_actions > 0:
+                obs, reward, done, info = env.dispatch_plan(env.plan_action_list)
+
+                if reward == None: # invalid plan
+                    obs = env.gen_obs()
+                    reward= 0
+                    done = False
+                    info = {'fwd_cell': None}
+                   
+                print('step=%s, reward=%.2f' % (env.step_count, reward))
+                reward_sum += reward
+            if done:
+                print('done!')
+                reset()
+            else:
+                redraw(obs)
             
         #process.stop()
-    print('%s, Overall reward=%.2f' % (meta_action, reward_sum))
+    #print('%s, Overall reward=%.2f' % (meta_action, reward_sum))
 
 def key_handler(event):
     print('pressed', event.key)

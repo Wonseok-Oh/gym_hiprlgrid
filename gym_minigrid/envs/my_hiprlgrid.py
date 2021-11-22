@@ -26,7 +26,7 @@ from rosplan_knowledge_msgs.msg import processReset
 from math import pi
 #from builtins import None
 
-class HiPRLGridV0(MiniGridEnv):
+class MyHiPRLGridV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -38,21 +38,27 @@ class HiPRLGridV0(MiniGridEnv):
         explore = 0
         scan = 1
         plan = 2
-        
+        keep_previous = 3
         # stop this episode
         #stop = 3
     
+    class Option_mode(IntEnum):
+        init = 0
+        explore = 1
+        scan = 2
+        plan = 3
 
     
     def __init__(self, grid_size_ = 10, max_steps_ = 100, agent_view_size_ = 5, num_objects=1, num_boxes = 3, process_num = 0):
         self.process_num = process_num
+        self.mode = self.Option_mode.init
         #self.actions = HiPRLGridV0.Actions
         #self.action_space = spaces.Discrete(len(self.actions))
-        self.meta_actions = HiPRLGridV0.MetaActions
+        self.meta_actions = MyHiPRLGridV0.MetaActions
         self.meta_action_space = spaces.Discrete(len(self.meta_actions))
         self.success = False
         print('gym_env' + str(process_num))
-        if (process_num == 0 or process_num == 8):
+        if (process_num % 8 == 0):
             self.init_node = rospy.init_node('gym_env' + str(process_num), anonymous=True)
         self.spatial_map_pub = rospy.Publisher("spatial_map" + str(process_num), OccupancyGrid, queue_size = 1, latch=True)
         self.object_map_pub = rospy.Publisher("object_map" + str(process_num), OccupancyGrid, queue_size = 1)
@@ -91,12 +97,12 @@ class HiPRLGridV0(MiniGridEnv):
         
         self.prev_agent_pos = None
         self.num_objects = num_objects
-        self.meta_actions = HiPRLGridV0.MetaActions
+        self.meta_actions = MyHiPRLGridV0.MetaActions
         self.num_boxes = num_boxes
         self.width = grid_size_
         self.height = grid_size_
         self.render_counter = 0
-        self.explore_action_plan = []
+        self.explore_action_list = []
         self.explore_action_set = False
         self.complete_plan = []
         self.complete_plan_flag = False
@@ -109,14 +115,14 @@ class HiPRLGridV0(MiniGridEnv):
 
         #self.br = tf2_ros.TransformBroadcaster()
         
+        
         obs = super().__init__(grid_size = grid_size_, max_steps= max_steps_, agent_view_size = agent_view_size_)
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(self.width*self.height*7,),
+            shape=(self.width*self.height*7+1,),
             dtype='uint8'
         )
-
         #print(obs)
         #self.update_maps(obs, None)
         #print("agent_pos: %d, %d" %(self.agent_pos[0], self.agent_pos[1]))
@@ -145,6 +151,7 @@ class HiPRLGridV0(MiniGridEnv):
 
     def generate_actions_from_complete_plan(self):
         actions = []
+        potential_goal_update = False
         self.planner_tracking_dir = self.agent_dir
         for item in self.complete_plan:
             item_actions = []
@@ -180,9 +187,11 @@ class HiPRLGridV0(MiniGridEnv):
     
             elif item.name == "openobject":
                 item_actions.append(self.Actions.open)
+                potential_goal_update = True
                 
             elif item.name == "pickupobjectinreceptacle" or item.name == "pickupobject":
                 item_actions.append(self.Actions.pickup)
+                potential_goal_update = True
                 
             elif item.name == "putobjectinreceptacle" or item.name == "putobject":
                 item_actions.append(self.Actions.drop)
@@ -190,13 +199,13 @@ class HiPRLGridV0(MiniGridEnv):
             elif item.name == "closeobject":
                 item_actions.append(self.Actions.close)
             
-            actions.append((item, item_actions))
+            actions.append((item, item_actions, potential_goal_update))
         return actions
         
     def explore_plan_cb(self, msg):
-        self.explore_action_plan  = [0] * len(msg.data)
+        self.explore_action_list  = [0] * len(msg.data)
         for i in range(len(msg.data)):
-            self.explore_action_plan[i] = msg.data[i]
+            self.explore_action_list[i] = msg.data[i]
         self.explore_action_set = True
         print("Explore_plan_cb called")
         
@@ -294,6 +303,12 @@ class HiPRLGridV0(MiniGridEnv):
         
     def reset(self):
         #print("reset is called")
+        self.mode = self.Option_mode.init
+        self.explore_action_list = []
+        self.plan_action_list = []
+        self.scan_counter = 0
+        self.previous_meta_action = None
+        
         self.opened_receptacles = set()
         self.closed_receptacles = set()
         self.seen_obj = set()
@@ -302,8 +317,8 @@ class HiPRLGridV0(MiniGridEnv):
         self.visited_locations = set()
         self.can_end = False
         self.object_map = ObjectMap(self.width, self.height, 3)
-        self.object_map_mlp = ObjectMap_MLP(self.width, self.height, ObjectMap_MLP.ObjGridStates.unknown)
         self.spatial_map = SpatialMap(self.width, self.height)
+        self.object_map_mlp = ObjectMap_MLP(self.width, self.height, ObjectMap_MLP.ObjGridStates.unknown)
         
         self.floor_map_one_hot = BinaryMap_MLP(self.width, self.height)
         self.goal_map_one_hot = BinaryMap_MLP(self.width, self.height)
@@ -317,7 +332,7 @@ class HiPRLGridV0(MiniGridEnv):
         self.new_coverage = 0
         self.prev_agent_pos = None
         self.render_counter = 0
-        self.explore_action_plan = []
+        self.explore_action_list = []
         self.explore_action_set = False
         #self.planner_action_set = False
         #self.planner_action_plan = []
@@ -339,6 +354,7 @@ class HiPRLGridV0(MiniGridEnv):
         self.agent_init_pos_pub.publish(self.agent_init_pos)
         self.publish_observation(obs['image'])
         self.success = False
+        #return obs
         return self.generate_network_input_one_hot_for_mlp(obs)
         #return np.reshape(self.object_map.map.data, (self.width*self.object_map.factor, self.height*self.object_map.factor))
     
@@ -483,37 +499,143 @@ class HiPRLGridV0(MiniGridEnv):
         ros_msg.agent_dir = self.agent_dir
         self.observation_pub.publish(ros_msg)        
         
+    def dispatch_plan(self, actions, render = False):
+        print("dispatch plan called")
+        reward_sum = 0
+        obs, reward, done, info = None, None, None, {'fwd_cell': None}
+        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0 and len(actions) > 0:
+            precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
+            if precondition_check == False:
+                print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
+                self.dispatch_plan_action_id = 0
+                self.prev_dispatch_plan_action_id = -1
+                return None, None, None, None
+        # dispatch plan until potential goal update
+        # 'actions[self.dispatch_plan_action_id][2] == False' means it is not potential goal update related semantic action
+        print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+        print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+
+        while actions[self.dispatch_plan_action_id][2] == False:
+            print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+            print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+
+            while len(actions[self.dispatch_plan_action_id][1]) > 0:    
+                action = actions[self.dispatch_plan_action_id][1].pop(0)
+                obs, reward, done, info = self.step(action)
+                if render:
+                    self.render()
+                reward_sum += reward
+            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+    
+            # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+            if not actions[self.dispatch_plan_action_id][1]:
+                self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+                if len(actions)-1 > self.dispatch_plan_action_id:
+                    self.dispatch_plan_action_id += 1
+                else:
+                    break
+        
+        if self.dispatch_plan_action_id + 1 <= len(actions):
+            while len(actions[self.dispatch_plan_action_id][1]) > 0:    
+                action = actions[self.dispatch_plan_action_id][1].pop(0)
+                obs, reward, done, info = self.step(action)
+                if render:
+                    self.render()
+                reward_sum += reward
+            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+        
+            # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+            if not actions[self.dispatch_plan_action_id][1]:
+                self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+                if len(actions)-1 > self.dispatch_plan_action_id:
+                    self.dispatch_plan_action_id += 1
+        
+        return obs, reward_sum, done, info        
         
     def invoke(self, meta_action, render = False):
         reward_sum = 0
+        print("mode: {}, meta_action: {}".format(self.mode, meta_action))
         done = False
         info = {'fwd_cell': None}
-        if meta_action == self.meta_actions.scan:
-            for i in range(4):
-                obs, reward, done, info = self.step(self.Actions.left)
-                print('step=%s, reward=%.2f' % (self.step_count, reward))
-                if render:
-                    self.render()
-                reward_sum += reward
-                if done:
-                    info['is_mission_succeeded'] = self.success
-                    print('done!')
-                    break
-                #else:
-                    #redraw(obs)
-                    #time.sleep(0.1)
-            
-            if reward_sum == -0.04:
-                reward_sum += -0.5
-                done = True
+        if meta_action == self.meta_actions.keep_previous:
+            if self.mode == self.Option_mode.init:
                 info['is_mission_succeeded'] = self.success
+                reward_sum = -0.5
+                done = True
+        
+            elif self.mode == self.Option_mode.explore:
+                if len(self.explore_action_list) <= 0:
+                    return self.invoke(self.meta_actions.explore)
 
-                
-        if meta_action == self.meta_actions.explore:
-            actions = self.explore()
-    
-            for i in range(len(actions)):
-                obs, reward, done, info = self.step(actions[i])
+                action = self.explore_action_list.pop(0)
+                obs, reward, done, info = self.step(action)
+                print('step=%s, reward=%.2f' % (self.step_count, reward))
+                if render:
+                    self.render()
+                reward_sum += reward
+                if done:
+                    info['is_mission_succeeded'] = self.success
+                    print('done!')
+                              
+            
+            elif self.mode == self.Option_mode.scan:
+                return self.invoke(self.meta_actions.scan)
+            
+            elif self.mode == self.Option_mode.plan:
+                if self.plan_action_list == None or len(self.plan_action_list) == 0:
+                    return self.invoke(self.meta_actions.plan)
+                else:
+                    len_actions = 0
+                    for i in range(len(self.plan_action_list)):
+                        len_actions = len_actions + len(self.plan_action_list[i][1])
+                    if len_actions > 0:
+                        obs, reward, done, info = self.dispatch_plan(self.plan_action_list, render)
+                        if render:
+                            self.render()
+                        if reward == None: # invalid plan
+                            obs = self.gen_obs()
+                            reward = 0
+                            done = True
+                            info = {'fwd_cell': None}
+                            
+                        print('step=%s, reward=%.2f' % (self.step_count, reward))
+                        reward_sum += reward
+                        if done:
+                            info['is_mission_succeeded'] = self.success
+                            print('done!')
+                    
+                    else:
+                        return self.invoke(self.meta_actions.plan)       
+                        
+        elif meta_action == self.meta_actions.scan:
+            
+            if self.scan_counter >= 4:
+                done = True
+                reward = -0.5
+            else:
+                obs, reward, done, info = self.step(self.Actions.left)
+                if self.previous_meta_action == None or (self.previous_meta_action == self.meta_actions.scan) or \
+                ((self.previous_meta_action == self.meta_actions.keep_previous) and (self.mode == self.Option_mode.scan)):
+                    self.scan_counter += 1
+                print('step=%s, reward=%.2f' % (self.step_count, reward))
+                if render:
+                    self.render()
+            
+            reward_sum += reward
+            
+            self.mode = self.Option_mode.scan
+            if done:
+                info['is_mission_succeeded'] = self.success
+                print('done!')
+        
+
+               
+        elif meta_action == self.meta_actions.explore:
+            self.mode = self.Option_mode.explore
+            self.explore_action_list = self.explore()
+            if len(self.explore_action_list) > 0:
+                action = self.explore_action_list.pop(0)
+                obs, reward, done, info = self.step(action)
                 if render:
                     self.render()
                 print('step=%s, reward=%.2f' % (self.step_count, reward))
@@ -521,64 +643,54 @@ class HiPRLGridV0(MiniGridEnv):
                 if done:
                     info['is_mission_succeeded'] = self.success
                     print('done!')
-                    break
+                    
 
-                #else:
-                    #redraw(obs)
-                    #time.sleep(0.5)
-            
-            if len(actions) <= 1 or reward_sum == -0.01:
+            elif len(self.explore_action_list) <= 0:
                 obs = self.gen_obs()
                 reward_sum += -0.5
                 done = True
                 info['is_mission_succeeded'] = self.success
                 
-        if meta_action == self.meta_actions.plan:
-            actions = self.plan()
+        elif meta_action == self.meta_actions.plan:
+            self.mode = self.Option_mode.plan
+            self.plan_action_list = self.plan()
     
-            if actions == None or len(actions) == 0:
+            if self.plan_action_list == None or len(self.plan_action_list) == 0:
                 obs, reward, done, info = self.step(self.Actions.pickup)
                 if render:
                     self.render()
                 done = True
-                #reward_sum = -1.0
                 print('step=%s, reward=%.2f' % (self.step_count, reward))
                 reward_sum += reward
                 if done:
                     print('done!')
                     info['is_mission_succeeded'] = self.success
-                #else:
-                    #redraw(obs)
-                    #time.sleep(0.5)
             
             else:
-                len_actions = 1
-                while (len_actions != 0):
-                    obs, reward, done, info = self.dispatch_plan(actions)
+                len_actions = 0
+                for i in range(len(self.plan_action_list)):
+                    len_actions = len_actions + len(self.plan_action_list[i][1])
+                if len_actions > 0:
+                    obs, reward, done, info = self.dispatch_plan(self.plan_action_list, render)
                     if render:
                         self.render()
-                    len_actions = 0
                     if reward == None: # invalid plan
                         obs = self.gen_obs()
-                        reward= 0
-                        done = False
+                        reward = 0
+                        done = True
                         info = {'fwd_cell': None}
-                        break
-                    for i in range(len(actions)):
-                        len_actions = len_actions + len(actions[i][1])
+                        
+                        
                     print('step=%s, reward=%.2f' % (self.step_count, reward))
                     reward_sum += reward
                     if done:
                         info['is_mission_succeeded'] = self.success
                         print('done!')
-                        break
-                    #else:
-                        #redraw(obs)
-                        #time.sleep(0.5)
-                
-            #process.stop()
+                        
+        self.previous_meta_action = meta_action
         info['is_mission_succeeded'] = self.success
         info['mission_completion_time'] = self.max_steps - self.steps_remaining
+
         obs = self.gen_obs()
         # map = self.generate_network_input(obs)
         map = self.generate_network_input_one_hot_for_mlp(obs)
@@ -608,6 +720,7 @@ class HiPRLGridV0(MiniGridEnv):
         map[:,:,5] = copy.deepcopy(np.reshape(self.unknown_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         map[:,:,6] = copy.deepcopy(np.reshape(self.wall_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         flatten_map = np.reshape(map, (10*10*7,))
+        flatten_map = np.append(flatten_map, self.mode)
         return flatten_map
 
 
@@ -646,8 +759,7 @@ class HiPRLGridV0(MiniGridEnv):
             else:
                 value = map.get_value(np.array([wx, wy]))
                 map.update_cell(np.array([wx, wy]), value + ObjectMap_MLP.ObjGridStates.agent)
-        flatten_map = np.zeros(shape=(self.width*self.height), dtype = np.uint8)
-        flatten_map = copy.deepcopy(map.map.data)
+        flatten_map = np.reshape(map, (self.width*self.height,))
         return flatten_map
     
     def render(self, mode = 'human', close = False, highlight = True, tile_size = TILE_PIXELS):
@@ -928,13 +1040,13 @@ class HiPRLGridV0(MiniGridEnv):
             if counter > 10:
                 return []
             #block until explore plan is subscribed and updated
-        print("plan: ", self.explore_action_plan)
+        print("plan: ", self.explore_action_list)
         self.explore_action_set = False
         
-        # step using actions extracted from explore_action_plan
+        # step using actions extracted from explore_action_list
         # temporally, set left
-        #self.explore_action_plan = [self.Actions.left] * 4
-        return self.explore_action_plan
+        #self.explore_action_list = [self.Actions.left] * 4
+        return self.explore_action_list
     
     def plan(self):
         print("Generating a Problem")
@@ -982,33 +1094,13 @@ class HiPRLGridV0(MiniGridEnv):
                 return None
         print("complete_plan_flag is set to True")
         
-        actions = self.generate_actions_from_complete_plan()
+        self.plan_action_list = self.generate_actions_from_complete_plan()
         self.dispatch_plan_action_id = 0
         self.prev_dispatch_plan_action_id = -1
         self.complete_plan_flag = False
-        return actions
-    
-    def dispatch_plan(self, actions):
-        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0 and len(actions) > 0:
-            precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
-            if precondition_check == False:
-                print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
-                self.dispatch_plan_action_id = 0
-                self.prev_dispatch_plan_action_id = -1
-                return None, None, None, None
-            
-        action = actions[self.dispatch_plan_action_id][1].pop(0)
-        #print(actions[self.dispatch_plan_action_id][0])
+        return self.plan_action_list
         
-        obs, reward, done, info = self.step(action)
-        self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
 
-        # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
-        if not actions[self.dispatch_plan_action_id][1]:
-            self.process_action_effect(actions[self.dispatch_plan_action_id][0])
-            self.dispatch_plan_action_id += 1
-
-        return obs, reward, done, info
     
     def check_precondition(self, item):
         rospy.wait_for_service('/check_precondition' + str(self.process_num))
@@ -1038,8 +1130,8 @@ class HiPRLGridV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-HiPRLGrid-v0',
-    entry_point='gym_minigrid.envs:HiPRLGridV0'
+    id='MiniGrid-MyHiPRLGrid-v0',
+    entry_point='gym_minigrid.envs:MyHiPRLGridV0'
 )
 
 """
@@ -1153,3 +1245,92 @@ print(self.observation_space)
 
         # No explicit mission in this environment --> to be modified
         self.mission = '' """
+        
+"""
+    def dispatch_plan(self, actions, render = False):
+        print("dispatch plan called")
+        reward_sum = 0
+        obs, reward, done, info = None, None, None, {'fwd_cell': None}
+        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0 and len(actions) > 0:
+            precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
+            if precondition_check == False:
+                print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
+                self.dispatch_plan_action_id = 0
+                self.prev_dispatch_plan_action_id = -1
+                return None, None, None, None
+        # dispatch plan until potential goal update
+        # 'actions[self.dispatch_plan_action_id][2] == False' means it is not potential goal update related semantic action
+        print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+        print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+
+        while actions[self.dispatch_plan_action_id][2] == False:
+            print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+            print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+
+            while len(actions[self.dispatch_plan_action_id][1]) > 0:    
+                action = actions[self.dispatch_plan_action_id][1].pop(0)
+                obs, reward, done, info = self.step(action)
+                if render:
+                    self.render()
+                reward_sum += reward
+            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+    
+            # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+            if not actions[self.dispatch_plan_action_id][1]:
+                self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+                if len(actions)-1 > self.dispatch_plan_action_id:
+                    self.dispatch_plan_action_id += 1
+                else:
+                    break
+        
+        if self.dispatch_plan_action_id + 1 <= len(actions):
+            while len(actions[self.dispatch_plan_action_id][1]) > 0:    
+                action = actions[self.dispatch_plan_action_id][1].pop(0)
+                obs, reward, done, info = self.step(action)
+                if render:
+                    self.render()
+                reward_sum += reward
+            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+        
+            # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+            if not actions[self.dispatch_plan_action_id][1]:
+                self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+                if len(actions)-1 > self.dispatch_plan_action_id:
+                    self.dispatch_plan_action_id += 1
+        
+        return obs, reward_sum, done, info
+"""
+"""
+    def dispatch_plan(self, actions, render = False):
+        print("dispatch plan called")
+        reward_sum = 0
+        obs, reward, done, info = None, None, None, {'fwd_cell': None}
+        if self.dispatch_plan_action_id - self.prev_dispatch_plan_action_id > 0 and len(actions) > 0:
+            precondition_check = self.check_precondition(actions[self.dispatch_plan_action_id][0])
+            if precondition_check == False:
+                print("dispatch_plan: {} precondition not achieved".format(actions[self.dispatch_plan_action_id][0].name))
+                self.dispatch_plan_action_id = 0
+                self.prev_dispatch_plan_action_id = -1
+                return None, None, None, None
+        # dispatch plan until potential goal update
+        # 'actions[self.dispatch_plan_action_id][2] == False' means it is not potential goal update related semantic action
+        #print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+        #print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+
+        if len(actions[self.dispatch_plan_action_id][1]) > 0:    
+            action = actions[self.dispatch_plan_action_id][1].pop(0)
+            obs, reward, done, info = self.step(action)
+            if render:
+                self.render()
+            reward_sum += reward
+            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+
+        # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+        if not actions[self.dispatch_plan_action_id][1]:
+            self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+            if len(actions)-1 > self.dispatch_plan_action_id:
+                self.dispatch_plan_action_id += 1
+            
+        
+        return obs, reward_sum, done, info
+        """
