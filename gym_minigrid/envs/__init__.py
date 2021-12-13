@@ -22,3 +22,5 @@ from gym_minigrid.envs.distshift import *
 from gym_minigrid.envs.hiprlgrid import *
 from gym_minigrid.envs.my_hiprlgrid import *
 from gym_minigrid.envs.multi_hiprlgrid import *
+from gym_minigrid.envs.multi_hiprlgrid_short_option import *
+from gym_minigrid.envs.multi_hiprlgrid_simple_reward import *

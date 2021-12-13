@@ -29,7 +29,7 @@ from math import pi
 
 
 
-class MultiHiPRLGridV0(MiniGridEnv):
+class MultiHiPRLGridV0SimpleR(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -52,9 +52,9 @@ class MultiHiPRLGridV0(MiniGridEnv):
         return np.array((-dy, dx))
     
     class Agent(object):
-        def __init__(self, id, multihiprlgridv0):
-            self.multihiprlgridv0 = multihiprlgridv0
-            self.mode = self.multihiprlgridv0.Option_mode.init
+        def __init__(self, id, multihiprlgridsimplerv0):
+            self.multihiprlgridsimplerv0 = multihiprlgridsimplerv0
+            self.mode = self.multihiprlgridsimplerv0.Option_mode.init
             self.pos = None
             self.prev_pos = None
             self.dir = None
@@ -720,8 +720,8 @@ class MultiHiPRLGridV0(MiniGridEnv):
         #obs, reward, done, info = MiniGridEnv.step(self, action)
         obs = self.gen_obs()
         
-        reward = -0.01 # constant time penalty
-
+        #reward = -0.01 # constant time penalty
+        reward = 0
         # update spatial map & object map
         #print("obs: {}".format(obs))
         self.update_maps(obs, action)
@@ -783,7 +783,7 @@ class MultiHiPRLGridV0(MiniGridEnv):
             
             
         # coverage reward
-        reward += self.new_coverage * self.coverage_reward_coeff
+        #reward += self.new_coverage * self.coverage_reward_coeff
 
         # reward_for_test
         # reward = 0
@@ -1717,8 +1717,8 @@ class MultiHiPRLGridV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MultiHiPRLGrid-v0',
-    entry_point='gym_minigrid.envs:MultiHiPRLGridV0'
+    id='MiniGrid-MultiHiPRLGridSimpleR-v0',
+    entry_point='gym_minigrid.envs:MultiHiPRLGridSimpleRV0'
 )
 
 """

@@ -29,7 +29,7 @@ from math import pi
 
 
 
-class MultiHiPRLGridV0(MiniGridEnv):
+class MultiHiPRLGridShortV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -52,9 +52,9 @@ class MultiHiPRLGridV0(MiniGridEnv):
         return np.array((-dy, dx))
     
     class Agent(object):
-        def __init__(self, id, multihiprlgridv0):
-            self.multihiprlgridv0 = multihiprlgridv0
-            self.mode = self.multihiprlgridv0.Option_mode.init
+        def __init__(self, id, multihiprlgridshortv0):
+            self.multihiprlgridshortv0 = multihiprlgridshortv0
+            self.mode = self.multihiprlgridshortv0.Option_mode.init
             self.pos = None
             self.prev_pos = None
             self.dir = None
@@ -297,6 +297,7 @@ class MultiHiPRLGridV0(MiniGridEnv):
         self.height = height
         self.max_steps = max_steps_
         self.see_through_walls = see_through_walls
+        self.meaningless = False
 
         self.seed(seed = seed)
         self.reset()
@@ -443,14 +444,16 @@ class MultiHiPRLGridV0(MiniGridEnv):
                 break
             
             if len(msg.list) > 0 and len(msg.list[j].data) <= 1 and msg.list[j].data[0] < 0:
-                self.agents[i].action_list  = [self.Actions.done] * min_len
+                self.meaningless = True
+                #self.agents[i].action_list  = [self.Actions.done] * min_len
             j = j + 1
         
         if min_len == 1000:
             for i in range(self.num_agents):
                 if self.agents[i].mode != self.Option_mode.explore:
                     continue
-                self.agents[i].action_list = [self.Actions.done]
+                #self.agents[i].action_list = [self.Actions.done]
+                self.meaningless = True
         self.explore_action_set = True
         
 
@@ -943,19 +946,28 @@ class MultiHiPRLGridV0(MiniGridEnv):
         for i in range(len(self.agents)):
             if len(self.agents[i].action_list) < min_option_len:
                 min_option_len = len(self.agents[i].action_list)
-             
-        for i in range(min_option_len):
-            action = []
-            for j in range(self.num_agents):
-                action.append(self.agents[j].action_list.pop(0))
-            obs, reward, done, info = self.step(action)
+        
+        if self.meaningless:            
+            done = True
+            info['is_mission_succeeded'] = self.success
+            info['mission_completion_time'] = self.max_steps - self.steps_remaining
+            obs = self.gen_obs()
+            map = self.generate_network_input_one_hot_for_mlp(obs)
+            return map, -0.5, done, info
             
-            
-            reward_sum += reward
-            if done:
-                info['is_mission_succeeded'] = self.success
-                info['mission_completion_time'] = self.max_steps - self.steps_remaining
-                return obs, reward_sum, done, info
+        elif self.meaningless is False:     
+            for i in range(min_option_len):
+                action = []
+                for j in range(self.num_agents):
+                    action.append(self.agents[j].action_list.pop(0))
+                obs, reward, done, info = self.step(action)
+                
+                
+                reward_sum += reward
+                if done:
+                    info['is_mission_succeeded'] = self.success
+                    info['mission_completion_time'] = self.max_steps - self.steps_remaining
+                    return obs, reward_sum, done, info
             
         info['is_mission_succeeded'] = self.success
         info['mission_completion_time'] = self.max_steps - self.steps_remaining
@@ -1670,7 +1682,8 @@ class MultiHiPRLGridV0(MiniGridEnv):
                 break
             
             if len(resp.action_array.list) > 0 and len(resp.action_array.list[j].data) == 1 and resp.action_array.list[j].data[0] < 0:
-                self.agents[i].action_list  = [self.Actions.done] * min_len
+                #self.agents[i].action_list  = [self.Actions.done] * min_len
+                self.meaningless = True
             j = j + 1
         
         # in case all failed to plan
@@ -1678,8 +1691,8 @@ class MultiHiPRLGridV0(MiniGridEnv):
             for i in range(self.num_agents):
                 if self.agents[i].mode != self.Option_mode.plan:
                     continue
-                self.agents[i].action_list = [self.Actions.done]
-        
+                #self.agents[i].action_list = [self.Actions.done]
+                self.meaningless = True
         
         #self.generate_actions_from_complete_plan(id_list)
         #self.dispatch_plan_action_id = 0
@@ -1717,8 +1730,8 @@ class MultiHiPRLGridV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MultiHiPRLGrid-v0',
-    entry_point='gym_minigrid.envs:MultiHiPRLGridV0'
+    id='MiniGrid-MultiHiPRLGridShort-v0',
+    entry_point='gym_minigrid.envs:MultiHiPRLGridShortV0'
 )
 
 """
