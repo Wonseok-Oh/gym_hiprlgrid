@@ -52,7 +52,7 @@ class HiPRLGridV0(MiniGridEnv):
         self.meta_action_space = spaces.Discrete(len(self.meta_actions))
         self.success = False
         print('gym_env' + str(process_num))
-        if (process_num == 0 or process_num == 8):
+        if (process_num % 8 == 0):
             self.init_node = rospy.init_node('gym_env' + str(process_num), anonymous=True)
         self.spatial_map_pub = rospy.Publisher("spatial_map" + str(process_num), OccupancyGrid, queue_size = 1, latch=True)
         self.object_map_pub = rospy.Publisher("object_map" + str(process_num), OccupancyGrid, queue_size = 1)

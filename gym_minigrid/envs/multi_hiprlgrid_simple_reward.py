@@ -29,7 +29,7 @@ from math import pi
 
 
 
-class MultiHiPRLGridV0SimpleR(MiniGridEnv):
+class MultiHiPRLGridPoseSimpleRV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -52,9 +52,9 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
         return np.array((-dy, dx))
     
     class Agent(object):
-        def __init__(self, id, multihiprlgridsimplerv0):
-            self.multihiprlgridsimplerv0 = multihiprlgridsimplerv0
-            self.mode = self.multihiprlgridsimplerv0.Option_mode.init
+        def __init__(self, id, multihiprlgridposesimplerv0):
+            self.multihiprlgridposesimplerv0 = multihiprlgridposesimplerv0
+            self.mode = self.multihiprlgridposesimplerv0.Option_mode.init
             self.pos = None
             self.prev_pos = None
             self.dir = None
@@ -179,7 +179,7 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
         
         
     
-    def __init__(self, grid_size_ = 20, max_steps_ = 100, agent_view_size_ = 5, num_objects=1, num_boxes = 10, process_num = 0, num_agents=3):
+    def __init__(self, grid_size_ = 20, max_steps_ = 200, agent_view_size_ = 5, num_objects=1, num_boxes = 10, process_num = 0, num_agents=3):
         self.agents = [self.Agent(i, self) for i in range(num_agents)]
         self.num_agents = num_agents
         see_through_walls = False
@@ -220,7 +220,7 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
         self.observation_space = spaces.Box(
             low=0,
             high=1,
-            shape=(width*height*8+3,),
+            shape=(width*height*10+3,),
             dtype='uint8'
         )
 
@@ -253,8 +253,8 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
 
         # Reward Coefficients
         self.coverage_reward_coeff = 0.002
-        self.open_reward_coeff = 0.1
-        self.carry_reward_coeff = 0.005
+        self.open_reward_coeff = 1.0
+        self.carry_reward_coeff = 5
         
         # Map initialize
         self.spatial_map = SpatialMap(grid_size_, grid_size_)
@@ -553,6 +553,11 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
             
             # Item picked up, being carried, initially nothing
             agent.carrying = None
+            agent.preCarrying = None
+            agent.mode = agent.multihiprlgridposev0.Option_mode.init
+            agent.prev_pos = None
+            agent.prev_dir = None
+            agent.action_list = []
             
         # Generate a new random grid at the start of each episode
         # To keep the same grid for each episode, call env.seed() with
@@ -722,6 +727,7 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
         
         #reward = -0.01 # constant time penalty
         reward = 0
+
         # update spatial map & object map
         #print("obs: {}".format(obs))
         self.update_maps(obs, action)
@@ -764,9 +770,11 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
             if self.agents[i].carrying != None:
                 if self.objIdx == self.agents[i].carrying.objectId:
                     self.planning_mode = self.PlanningMode.bring
-                    reward += 1.0 * self.carry_reward_coeff
+                    if self.agents[i].preCarrying is None:
+                        reward += 1.0 * self.carry_reward_coeff
                 else:
-                    reward += -1.0 * self.carry_reward_coeff
+                    if self.agents[i].preCarrying is None:
+                        reward += -1.0 * self.carry_reward_coefff
 
             # If successfully dropping an object into the target
             u, v = self.dir_vec_i(i)
@@ -779,7 +787,7 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
                         done = True
                         self.success = True
                         #reward = 1.0
-                        reward += 0.5
+                        reward += 10
             
             
         # coverage reward
@@ -986,13 +994,13 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
 
     def generate_network_input_one_hot_for_mlp(self, obs):
         temp_ball_map = copy.deepcopy(self.ball_map_one_hot)
-        map = np.zeros(shape=(20, 20, 8), dtype=np.uint8)
+        map = np.zeros(shape=(20, 20, 10), dtype=np.uint8)
         
         for i in range(self.num_agents):
             obs_grid, _ = Grid.decode(obs['image'][i])
             object = obs_grid.get(obs_grid.width//2, obs_grid.height-1)
             wx, wy = self.get_world_coordinate_i(obs_grid.width//2, obs_grid.height-1, i)
-            map[self.agents[i].pos[0],self.spatial_map.map.info.height-self.agents[i].pos[1],7] = 1
+            map[self.agents[i].pos[0],self.spatial_map.map.info.height-self.agents[i].pos[1],7+i] = 1
             if np.array_equal(self.agents[i].pos, np.array([wx,wy])):
                 wy = self.spatial_map.map.info.height - wy - 1
                 #self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free
@@ -1005,7 +1013,7 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
         map[:,:,4] = copy.deepcopy(np.reshape(self.goal_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         map[:,:,5] = copy.deepcopy(np.reshape(self.unknown_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         map[:,:,6] = copy.deepcopy(np.reshape(self.wall_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
-        flatten_map = np.reshape(map, (20*20*8,))
+        flatten_map = np.reshape(map, (20*20*10,))
         
         for i in range(self.num_agents):
             flatten_map = np.append(flatten_map, self.agents[i].carrying is not None)
@@ -1717,8 +1725,8 @@ class MultiHiPRLGridV0SimpleR(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MultiHiPRLGridSimpleR-v0',
-    entry_point='gym_minigrid.envs:MultiHiPRLGridSimpleRV0'
+    id='MiniGrid-MultiHiPRLGridPoseSimpleR-v0',
+    entry_point='gym_minigrid.envs:MultiHiPRLGridPoseSimpleRV0'
 )
 
 """

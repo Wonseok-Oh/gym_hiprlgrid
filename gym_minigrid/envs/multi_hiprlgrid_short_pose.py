@@ -29,7 +29,7 @@ from math import pi
 
 
 
-class MultiHiPRLGridShortV0(MiniGridEnv):
+class MultiHiPRLGridShortPoseV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -52,9 +52,9 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         return np.array((-dy, dx))
     
     class Agent(object):
-        def __init__(self, id, multihiprlgridshortv0):
-            self.multihiprlgridshortv0 = multihiprlgridshortv0
-            self.mode = self.multihiprlgridshortv0.Option_mode.init
+        def __init__(self, id, multihiprlgridshortposev0):
+            self.multihiprlgridshortposev0 = multihiprlgridshortposev0
+            self.mode = self.multihiprlgridshortposev0.Option_mode.init
             self.pos = None
             self.prev_pos = None
             self.dir = None
@@ -179,7 +179,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         
         
     
-    def __init__(self, grid_size_ = 20, max_steps_ = 100, agent_view_size_ = 5, num_objects=1, num_boxes = 10, process_num = 0, num_agents=3):
+    def __init__(self, grid_size_ = 20, max_steps_ = 200, agent_view_size_ = 5, num_objects=1, num_boxes = 10, process_num = 0, num_agents=3):
         self.agents = [self.Agent(i, self) for i in range(num_agents)]
         self.num_agents = num_agents
         see_through_walls = False
@@ -219,8 +219,8 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
 
         self.observation_space = spaces.Box(
             low=0,
-            high=1,
-            shape=(width*height*8+3,),
+            high=255,
+            shape=(width*height*10+3,),
             dtype='uint8'
         )
 
@@ -252,9 +252,9 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         #    self.complete_plan_sub.append(rospy.Subscriber("/rosplan_parsing_interface"+ str(process_num) + "_" + str(i) + "/complete_plan" , CompletePlan, self.complete_plan_cb, (i)))
 
         # Reward Coefficients
-        self.coverage_reward_coeff = 0.002
-        self.open_reward_coeff = 0.1
-        self.carry_reward_coeff = 0.005
+        self.coverage_reward_coeff = 0.00002
+        self.open_reward_coeff = 0.01
+        self.carry_reward_coeff = 0.2
         
         # Map initialize
         self.spatial_map = SpatialMap(grid_size_, grid_size_)
@@ -297,7 +297,6 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         self.height = height
         self.max_steps = max_steps_
         self.see_through_walls = see_through_walls
-        self.meaningless = False
 
         self.seed(seed = seed)
         self.reset()
@@ -359,9 +358,9 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             assert(agent_key_value.key == 'a')
 
             agent_num = agent_key_value.value
-            print('agent: {}'.format(agent_num))
+            #print('agent: {}'.format(agent_num))
             agent_num = int(agent_num[-1])
-            print('agent_num: {}'.format(agent_num))
+            #print('agent_num: {}'.format(agent_num))
             
             dir_key_value = item.parameters[-1]
         
@@ -428,7 +427,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             #print("len(msg.list): {}, j: {}".format(len(msg.list), j))
             if len(msg.list) > 0 and len(msg.list[j].data) < min_len and len(msg.list[j].data) > 1:
                 min_len = len(msg.list[j].data) 
-            print("agent {}'s action length: {}".format(i, len(msg.list[j].data)))
+            #print("agent {}'s action length: {}".format(i, len(msg.list[j].data)))
             self.agents[i].action_list  = [0] * len(msg.list[j].data)
             for k in range(len(msg.list[j].data)):
                 self.agents[i].action_list[k] = msg.list[j].data[k]
@@ -443,9 +442,10 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             if j >= len(msg.list):
                 break
             
-            if len(msg.list) > 0 and len(msg.list[j].data) <= 1 and msg.list[j].data[0] < 0:
-                self.meaningless = True
+            if len(msg.list) > 0 and len(msg.list[j].data) <= 1:
+                if len(msg.list[j].data) == 0 or msg.list[j].data[0] < 0:
                 #self.agents[i].action_list  = [self.Actions.done] * min_len
+                    self.meaningless = True
             j = j + 1
         
         if min_len == 1000:
@@ -556,6 +556,12 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             
             # Item picked up, being carried, initially nothing
             agent.carrying = None
+            agent.preCarrying = None
+            agent.mode = agent.multihiprlgridshortposev0.Option_mode.init
+            agent.prev_pos = None
+            agent.prev_dir = None
+            agent.action_list = []
+            
             
         # Generate a new random grid at the start of each episode
         # To keep the same grid for each episode, call env.seed() with
@@ -564,8 +570,8 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         
         # These fields should be defined by _gen_grid
         for agent in self.agents:
-            print("agent.pos: {}".format(agent.pos))
-            print("agent.dir: {}".format(agent.dir))
+            #print("agent.pos: {}".format(agent.pos))
+            #print("agent.dir: {}".format(agent.dir))
 
             assert agent.pos is not None
             assert agent.dir is not None
@@ -610,7 +616,6 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         self.action_execution_flag = False
         self.complete_plan = []
         self.complete_plan_flag = False
-        self.meaningless = False
         reset_msg = processReset()
         reset_msg.domain_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_mini_multi.pddl"
         reset_msg.problem_path = "/home/morin/catkin_ws/src/hiprl_replicate/pddl/hiprl_problem0_multi.pddl"
@@ -626,6 +631,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         self.agent_init_pos_pub.publish(self.agent_init_pos)
         self.publish_observation(obs['image'])
         self.success = False
+        self.meaningless = False
         #return obs['image']
         
         return self.generate_network_input_one_hot_for_mlp(obs)
@@ -724,7 +730,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         #obs, reward, done, info = MiniGridEnv.step(self, action)
         obs = self.gen_obs()
         
-        reward = -0.01 # constant time penalty
+        reward = -0.0001 # constant time penalty
 
         # update spatial map & object map
         #print("obs: {}".format(obs))
@@ -740,7 +746,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         
         # reward for open/close action
         for i in range(len(self.agents)):
-            print(info)            
+            #print(info)            
             if info_n['fwd_cell'+str(i)] is not None:
                 if info_n['fwd_cell'+str(i)].can_toggle() and action[i] == self.Actions.open:
                     if info_n['fwd_cell'+str(i)].objectId in self.closed_receptacles: # if the receptacle was closed
@@ -768,9 +774,11 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             if self.agents[i].carrying != None:
                 if self.objIdx == self.agents[i].carrying.objectId:
                     self.planning_mode = self.PlanningMode.bring
-                    reward += 1.0 * self.carry_reward_coeff
+                    if self.agents[i].preCarrying is None:
+                        reward += 1.0 * self.carry_reward_coeff
                 else:
-                    reward += -1.0 * self.carry_reward_coeff
+                    if self.agents[i].preCarrying is None:
+                        reward += -1.0 * self.carry_reward_coeff
 
             # If successfully dropping an object into the target
             u, v = self.dir_vec_i(i)
@@ -783,7 +791,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
                         done = True
                         self.success = True
                         #reward = 1.0
-                        reward += 0.5
+                        reward += 1.0
             
             
         # coverage reward
@@ -797,7 +805,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         
         # if step num exceed 200, done
         if self.steps_remaining <= 0:
-            reward += -0.5
+            reward += -0.1
             done = True
         
 
@@ -954,21 +962,21 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             info['mission_completion_time'] = self.max_steps - self.steps_remaining
             obs = self.gen_obs()
             map = self.generate_network_input_one_hot_for_mlp(obs)
-            return map, -0.5, done, info
+            return map, -0.1, done, info
+        
+             
+        for i in range(min_option_len):
+            action = []
+            for j in range(self.num_agents):
+                action.append(self.agents[j].action_list.pop(0))
+            obs, reward, done, info = self.step(action)
             
-        elif self.meaningless is False:     
-            for i in range(min_option_len):
-                action = []
-                for j in range(self.num_agents):
-                    action.append(self.agents[j].action_list.pop(0))
-                obs, reward, done, info = self.step(action)
-                
-                
-                reward_sum += reward
-                if done:
-                    info['is_mission_succeeded'] = self.success
-                    info['mission_completion_time'] = self.max_steps - self.steps_remaining
-                    return obs, reward_sum, done, info
+            
+            reward_sum += reward
+            if done:
+                info['is_mission_succeeded'] = self.success
+                info['mission_completion_time'] = self.max_steps - self.steps_remaining
+                return obs, reward_sum, done, info
             
         info['is_mission_succeeded'] = self.success
         info['mission_completion_time'] = self.max_steps - self.steps_remaining
@@ -999,13 +1007,13 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
 
     def generate_network_input_one_hot_for_mlp(self, obs):
         temp_ball_map = copy.deepcopy(self.ball_map_one_hot)
-        map = np.zeros(shape=(20, 20, 8), dtype=np.uint8)
+        map = np.zeros(shape=(20, 20, 10), dtype=np.uint8)
         
         for i in range(self.num_agents):
             obs_grid, _ = Grid.decode(obs['image'][i])
             object = obs_grid.get(obs_grid.width//2, obs_grid.height-1)
             wx, wy = self.get_world_coordinate_i(obs_grid.width//2, obs_grid.height-1, i)
-            map[self.agents[i].pos[0],self.spatial_map.map.info.height-self.agents[i].pos[1],7] = 1
+            map[self.agents[i].pos[0],self.spatial_map.map.info.height-self.agents[i].pos[1],7+i] = 1
             if np.array_equal(self.agents[i].pos, np.array([wx,wy])):
                 wy = self.spatial_map.map.info.height - wy - 1
                 #self.spatial_map.update_cell(np.array([wx,wy]), SpatialMap.OccGridStates.free
@@ -1018,11 +1026,11 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         map[:,:,4] = copy.deepcopy(np.reshape(self.goal_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         map[:,:,5] = copy.deepcopy(np.reshape(self.unknown_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
         map[:,:,6] = copy.deepcopy(np.reshape(self.wall_map_one_hot.map.data, (self.ball_map_one_hot.map.info.width, self.ball_map_one_hot.map.info.height)))
-        flatten_map = np.reshape(map, (20*20*8,))
+        flatten_map = np.reshape(map, (20*20*10,))
         
         for i in range(self.num_agents):
             flatten_map = np.append(flatten_map, self.agents[i].carrying is not None)
-        print("gen_net_input_one_hot_for_mlp's return shape: {}".format(flatten_map.shape))
+        #print("gen_net_input_one_hot_for_mlp's return shape: {}".format(flatten_map.shape))
         return flatten_map
 
 
@@ -1315,7 +1323,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         #print(obs['image'])
         #print(self.agent_dir)
         for i in range(len(self.agents)):
-            print("i: {}".format(i))
+            #print("i: {}".format(i))
             if np.array_equal(self.agents[i].prev_pos, self.agents[i].pos) and np.array_equal(self.agents[i].prev_dir, self.agents[i].dir): # no movement
                 if action is not None and (action[i] == self.Actions.open or action[i] == self.Actions.pickup or action[i] == self.Actions.drop):
                     front = self.agents[i].front_pos()
@@ -1489,7 +1497,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             self.agents[i].action_list = [self.Actions.left] * 4
 
     def explore(self, id_list):
-        print("multi_hiprlgrid: explore called")
+        #print("multi_hiprlgrid: explore called")
         rospy.wait_for_service('init_pose_list_update' + str(self.process_num))
         result = False
         try:
@@ -1501,7 +1509,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             
         except rospy.ServiceException as e:
             print("Service call failed: %s" %e)
-        print("init_pose_list_update: ", result)
+        #print("init_pose_list_update: ", result)
 
         try:
             pose_update = rospy.ServiceProxy('pose_list_update' + str(self.process_num), InitPosList)
@@ -1512,7 +1520,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         except rospy.ServiceException as e:
             print("Service call failed: %s" %e)
         
-        print("pose_list_update: ", result)       
+        #print("pose_list_update: ", result)       
  
         # add agents locations as obstacle to copied map instance which is for navigation
         navigation_map = copy.deepcopy(self.spatial_map)
@@ -1526,7 +1534,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         
         counter = 0
         while(self.explore_action_set is False):
-            print("explore_action_set: ", self.explore_action_set)
+            #print("explore_action_set: ", self.explore_action_set)
             counter = counter + 1
             time.sleep(0.1)
             if counter > 10:
@@ -1537,7 +1545,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         for i in id_list:
             if self.agents[i].mode != self.Option_mode.explore:
                 continue
-            print("agent {} plan: {}".format(i, self.agents[i].action_list))
+            #print("agent {} plan: {}".format(i, self.agents[i].action_list))
             if len(self.agents[i].action_list) == 0 or self.agents[i].action_list[0] == self.Actions.done:
                 fail_counter = fail_counter + 1
                 
@@ -1554,7 +1562,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
         return
     
     def plan(self, id_list):
-        print("plan in planning_mode: {}".format(self.planning_mode))
+        #print("plan in planning_mode: {}".format(self.planning_mode))
         try:
             pose_update = rospy.ServiceProxy('pose_list_update' + str(self.process_num), InitPosList)
             x = [(self.agents[i].pos[0] + 0.5) * self.spatial_map.map.info.resolution for i in range(self.num_agents)]
@@ -1565,13 +1573,13 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             result = False
             print("Service call failed: %s" %e)
         
-        print("pose_list_update: ", result)       
+        #print("pose_list_update: ", result)       
 
         
         self.navigation_map_pub.publish(self.spatial_map.map)
         
         if self.planning_mode == self.PlanningMode.search:
-            print("Allocating tasks / generate plan for planning agents to search")
+            #print("Allocating tasks / generate plan for planning agents to search")
             rospy.wait_for_service('/task_allocate'+ str(self.process_num))
             try:
                 task_allocate = rospy.ServiceProxy('/task_allocate' + str(self.process_num), PlanningID)
@@ -1602,7 +1610,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
                 return None
         
         elif self.planning_mode == self.PlanningMode.keep:
-            print("Generate plan for planning agents to keep")
+            #print("Generate plan for planning agents to keep")
             rospy.wait_for_service('/task_allocate'+ str(self.process_num))
             try:
                 task_allocate = rospy.ServiceProxy('/task_allocate' + str(self.process_num), PlanningID)
@@ -1630,7 +1638,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
                 return None
         
         elif self.planning_mode == self.PlanningMode.bring:
-            print("Generate plan for planning agents to bring")
+            #print("Generate plan for planning agents to bring")
             rospy.wait_for_service('/task_allocate'+ str(self.process_num))
             try:
                 task_allocate = rospy.ServiceProxy('/task_allocate' + str(self.process_num), PlanningID)
@@ -1666,7 +1674,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
 
             if len(resp.action_array.list) > 0 and len(resp.action_array.list[j].data) < min_len and len(resp.action_array.list[j].data) > 0 and resp.action_array.list[j].data[0] >= 0:
                 min_len = len(resp.action_array.list[j].data) 
-            print("agent {}'s plan action length: {}".format(i, len(resp.action_array.list[j].data)))
+            #print("agent {}'s plan action length: {}".format(i, len(resp.action_array.list[j].data)))
             self.agents[i].action_list  = [0] * len(resp.action_array.list[j].data)
             for k in range(len(resp.action_array.list[j].data)):
                 self.agents[i].action_list[k] = resp.action_array.list[j].data[k]
@@ -1694,6 +1702,7 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
                     continue
                 #self.agents[i].action_list = [self.Actions.done]
                 self.meaningless = True
+        
         
         #self.generate_actions_from_complete_plan(id_list)
         #self.dispatch_plan_action_id = 0
@@ -1731,8 +1740,8 @@ class MultiHiPRLGridShortV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MultiHiPRLGridShort-v0',
-    entry_point='gym_minigrid.envs:MultiHiPRLGridShortV0'
+    id='MiniGrid-MultiHiPRLGridShortPose-v0',
+    entry_point='gym_minigrid.envs:MultiHiPRLGridShortPoseV0'
 )
 
 """
