@@ -860,6 +860,11 @@ class MiniGridEnv(gym.Env):
     def steps_remaining(self):
         return self.max_steps - self.step_count
 
+    def steps_remained(self):
+        print('steps_remained: {}'.format(self.steps_remaining))
+        return self.max_steps - self.step_count
+
+
     def __str__(self):
         """
         Produce a pretty string of the environment's grid along with the agent.

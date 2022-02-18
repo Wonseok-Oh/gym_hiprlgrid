@@ -21,8 +21,10 @@ from gym_minigrid.envs.dynamicobstacles import *
 from gym_minigrid.envs.distshift import *
 from gym_minigrid.envs.hiprlgrid import *
 from gym_minigrid.envs.my_hiprlgrid import *
+from gym_minigrid.envs.my_hiprlgrid_pi import *
 from gym_minigrid.envs.multi_hiprlgrid import *
 from gym_minigrid.envs.multi_hiprlgrid_short_option import *
 from gym_minigrid.envs.multi_hiprlgrid_simple_reward import *
 from gym_minigrid.envs.multi_hiprlgrid_pose import *
 from gym_minigrid.envs.multi_hiprlgrid_short_pose import *
+from gym_minigrid.envs.my_multi_hiprlgrid_short_pose import *

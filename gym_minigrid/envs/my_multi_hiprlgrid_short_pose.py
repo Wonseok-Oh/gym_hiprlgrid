@@ -29,7 +29,7 @@ from math import pi
 
 
 
-class MultiHiPRLGridShortPoseV0(MiniGridEnv):
+class MyMultiHiPRLGridShortPoseV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -52,9 +52,9 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         return np.array((-dy, dx))
     
     class Agent(object):
-        def __init__(self, id, multihiprlgridshortposev0):
-            self.multihiprlgridshortposev0 = multihiprlgridshortposev0
-            self.mode = self.multihiprlgridshortposev0.Option_mode.init
+        def __init__(self, id, mymultihiprlgridshortposev0):
+            self.mymultihiprlgridshortposev0 = mymultihiprlgridshortposev0
+            self.mode = self.mymultihiprlgridshortposev0.Option_mode.init
             self.pos = None
             self.prev_pos = None
             self.dir = None
@@ -74,7 +74,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         explore = 0
         scan = 1
         plan = 2
-        #keep_previous = 3
+        keep_previous = 3
         # stop this episode
         #stop = 3
     
@@ -221,7 +221,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         self.observation_space = spaces.Box(
             low=0,
             high=255,
-            shape=(width*height*10+3,),
+            shape=(width*height*10+6,),
             dtype='uint8'
         )
 
@@ -325,7 +325,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
 
     def complete_plan_cb(self, msg):
         self.complete_plan_flag = True
-        print("complete_plan: {}".format(msg))
+        #print("complete_plan: {}".format(msg))
 
     def generate_actions_from_complete_plan(self, id_list):
         potential_goal_update = False
@@ -419,7 +419,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         j = 0
         min_len = 1000
         for i in range(self.num_agents):
-            if self.agents[i].mode != self.Option_mode.explore:
+            if not (i in self.explore_agent_id_list):
                 continue
             
             if j >= len(msg.list):
@@ -437,7 +437,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         
         j = 0
         for i in range(self.num_agents):
-            if self.agents[i].mode != self.Option_mode.explore:
+            if not (i in self.explore_agent_id_list):
                 continue
             
             if j >= len(msg.list):
@@ -451,7 +451,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         
         if min_len == 1000:
             for i in range(self.num_agents):
-                if self.agents[i].mode != self.Option_mode.explore:
+                if not (i in self.explore_agent_id_list):
                     continue
                 #self.agents[i].action_list = [self.Actions.done]
                 self.meaningless = True
@@ -558,7 +558,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
             # Item picked up, being carried, initially nothing
             agent.carrying = None
             agent.preCarrying = None
-            agent.mode = agent.multihiprlgridshortposev0.Option_mode.init
+            agent.mode = agent.mymultihiprlgridshortposev0.Option_mode.init
             agent.prev_pos = None
             agent.prev_dir = None
             agent.action_list = []
@@ -589,6 +589,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         self.closed_receptacles = set()
         self.seen_obj = set()
         self.seen_receptacles = set()
+        self.open_occur = False
         self.checked_receptacles = set()
         self.visited_locations = set()
         self.can_end = False
@@ -703,6 +704,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
             elif action[i] == self.actions.open:
                 if fwd_cell and fwd_cell.can_toggle():
                     fwd_cell.isOpen = True
+                    self.open_occur = True
                     info = fwd_cell
                     
             # close an object
@@ -927,30 +929,48 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         #print("mode: {}, meta_action: {}".format(self.mode, meta_action))
         done = False
         info = {'fwd_cell': None}
-        explore_agent_id_list = []
-        plan_agent_id_list = []
-        scan_agent_id_list = []
+        self.explore_agent_id_list = []
+        self.plan_agent_id_list = []
+        self.scan_agent_id_list = []
         for i in range(len(meta_action)):
             if meta_action[i] == self.meta_actions.explore:
-                explore_agent_id_list.append(i)
+                self.explore_agent_id_list.append(i)
                 self.agents[i].mode = self.Option_mode.explore
                 
             elif meta_action[i] == self.meta_actions.plan:
-                plan_agent_id_list.append(i)
+                self.plan_agent_id_list.append(i)
                 self.agents[i].mode = self.Option_mode.plan
                 
             elif meta_action[i] == self.meta_actions.scan:
-                scan_agent_id_list.append(i)
-                self.agents[i].mode = self.Option_mode.scan    
+                self.scan_agent_id_list.append(i)
+                self.agents[i].mode = self.Option_mode.scan              
                 
-        if len(explore_agent_id_list) > 0:
-            self.explore(explore_agent_id_list)
-        
-        if len(plan_agent_id_list) > 0:
-            self.plan(plan_agent_id_list)
+            elif meta_action[i] == self.meta_actions.keep_previous:
+                if len(self.agents[i].action_list) == 0:
+                    if self.agents[i].mode == self.Option_mode.explore:
+                        self.explore_agent_id_list.append(i)
+                    elif self.agents[i].mode == self.Option_mode.plan:
+                        self.plan_agent_id_list.append(i)
+                    elif self.agents[i].mode == self.Option_mode.scan:
+                        self.scan_agent_id_list.append(i)
+                
+                if self.mode == self.Option_mode.init:
+                    reward_sum = -0.1
+                    done = True
+                    info['is_mission_succeeded'] = self.success
+                    info['mission_completion_time'] = self.max_steps - self.steps_remaining
+                    obs = self.gen_obs()
+                    map = self.generate_network_input_one_hot_for_mlp(obs)
+                    return map, reward_sum, done, info
 
-        if len(scan_agent_id_list) > 0:
-            self.scan(scan_agent_id_list)
+        if len(self.explore_agent_id_list) > 0:
+            self.explore(self.explore_agent_id_list)
+        
+        if len(self.plan_agent_id_list) > 0:
+            self.plan(self.plan_agent_id_list)
+
+        if len(self.scan_agent_id_list) > 0:
+            self.scan(self.scan_agent_id_list)
         
         min_option_len = 1000  # 1000 is nothing special, just for simple infinity value
         for i in range(len(self.agents)):
@@ -968,18 +988,25 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
              
         for i in range(min_option_len):
             action = []
+            prev_len = len(self.seen_receptacles)
             for j in range(self.num_agents):
                 action.append(self.agents[j].action_list.pop(0))
             obs, reward, done, info = self.step(action)
             if render:
-                self.render()
+                self.render()           
+            reward_sum += reward             
             
             
-            reward_sum += reward
             if done:
                 info['is_mission_succeeded'] = self.success
                 info['mission_completion_time'] = self.max_steps - self.steps_remaining
+                print('Step %d: %s, Overall reward=%.2f' % (self.step_count, meta_action, reward_sum))
+
                 return obs, reward_sum, done, info
+            
+            if self.open_occur:
+                self.open_occur = False
+                break;
             
         info['is_mission_succeeded'] = self.success
         info['mission_completion_time'] = self.max_steps - self.steps_remaining
@@ -1033,6 +1060,8 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         
         for i in range(self.num_agents):
             flatten_map = np.append(flatten_map, self.agents[i].carrying is not None)
+            flatten_map = np.append(flatten_map, self.agents[i].mode)
+
         #print("gen_net_input_one_hot_for_mlp's return shape: {}".format(flatten_map.shape))
         return flatten_map
 
@@ -1669,7 +1698,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         j = 0
         min_len = 1000
         for i in range(self.num_agents):
-            if self.agents[i].mode != self.Option_mode.plan:
+            if not (i in self.plan_agent_id_list):
                 continue
 
             if j >= len(resp.action_array.list):
@@ -1687,7 +1716,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         
         j = 0
         for i in range(self.num_agents):
-            if self.agents[i].mode != self.Option_mode.plan:
+            if not (i in self.plan_agent_id_list):
                 continue
             
             if j >= len(resp.action_array.list):
@@ -1701,7 +1730,7 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
         # in case all failed to plan
         if min_len == 1000:
             for i in range(self.num_agents):
-                if self.agents[i].mode != self.Option_mode.plan:
+                if not (i in self.plan_agent_id_list):
                     continue
                 #self.agents[i].action_list = [self.Actions.done]
                 self.meaningless = True
@@ -1743,8 +1772,8 @@ class MultiHiPRLGridShortPoseV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MultiHiPRLGridShortPose-v0',
-    entry_point='gym_minigrid.envs:MultiHiPRLGridShortPoseV0'
+    id='MiniGrid-MyMultiHiPRLGridShortPose-v0',
+    entry_point='gym_minigrid.envs:MyMultiHiPRLGridShortPoseV0'
 )
 
 """

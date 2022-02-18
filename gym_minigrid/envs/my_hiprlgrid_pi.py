@@ -26,7 +26,7 @@ from rosplan_knowledge_msgs.msg import processReset
 from math import pi
 #from builtins import None
 
-class MyHiPRLGridV0(MiniGridEnv):
+class MyHiPRLGridPIV0(MiniGridEnv):
     """
     Environment similar to kitchen.
     This environment has goals and rewards.
@@ -54,7 +54,7 @@ class MyHiPRLGridV0(MiniGridEnv):
         self.mode = self.Option_mode.init
         #self.actions = HiPRLGridV0.Actions
         #self.action_space = spaces.Discrete(len(self.actions))
-        self.meta_actions = MyHiPRLGridV0.MetaActions
+        self.meta_actions = MyHiPRLGridPIV0.MetaActions
         self.meta_action_space = spaces.Discrete(len(self.meta_actions))
         self.success = False
         print('gym_env' + str(process_num))
@@ -97,7 +97,7 @@ class MyHiPRLGridV0(MiniGridEnv):
         
         self.prev_agent_pos = None
         self.num_objects = num_objects
-        self.meta_actions = MyHiPRLGridV0.MetaActions
+        self.meta_actions = MyHiPRLGridPIV0.MetaActions
         self.num_boxes = num_boxes
         self.width = grid_size_
         self.height = grid_size_
@@ -144,21 +144,6 @@ class MyHiPRLGridV0(MiniGridEnv):
         #self.launch.stop()
         #rospy.signal_shutdown("End class")
 
-    def unchecked_seen_box(self):
-        return self.seen_box.difference(self.checked_receptacles)
-    
-    def found_ball(self):
-        return self.found
-    
-    def found_goal(self):
-        return self.found_goal_
-    
-    def Carrying(self):
-        return self.carrying
-
-    def meta_action(self):
-        return self.MetaActions
-    
     def complete_plan_cb(self, msg):
         self.complete_plan = msg.plan
         self.complete_plan_flag = True
@@ -323,7 +308,6 @@ class MyHiPRLGridV0(MiniGridEnv):
         self.plan_action_list = []
         self.scan_counter = 0
         self.previous_meta_action = None
-        self.found = False
         
         self.opened_receptacles = set()
         self.closed_receptacles = set()
@@ -343,7 +327,7 @@ class MyHiPRLGridV0(MiniGridEnv):
         self.checked_box_map_one_hot = BinaryMap_MLP(self.width, self.height)
         self.ball_map_one_hot = BinaryMap_MLP(self.width, self.height)
         self.unknown_map_one_hot = BinaryMap_MLP(self.width, self.height, value = 1)
-        self.found_goal_ = False
+
         
         self.new_coverage = 0
         self.prev_agent_pos = None
@@ -528,28 +512,28 @@ class MyHiPRLGridV0(MiniGridEnv):
                 return None, None, None, None
         # dispatch plan until potential goal update
         # 'actions[self.dispatch_plan_action_id][2] == False' means it is not potential goal update related semantic action
-        print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
-        print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+        #print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+        #print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
 
-        while actions[self.dispatch_plan_action_id][2] == False:
-            print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
-            print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
+        #while actions[self.dispatch_plan_action_id][2] == False:
+            #print("actions length: {}, dispatch_plan_id: {}".format(len(actions), self.dispatch_plan_action_id))
+            #print("actions self.dispatch_plan_action_id length: {}".format(len(actions[self.dispatch_plan_action_id])))
 
-            while len(actions[self.dispatch_plan_action_id][1]) > 0:    
-                action = actions[self.dispatch_plan_action_id][1].pop(0)
-                obs, reward, done, info = self.step(action)
-                if render:
-                    self.render()
-                reward_sum += reward
-            self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
-    
-            # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
-            if not actions[self.dispatch_plan_action_id][1]:
-                self.process_action_effect(actions[self.dispatch_plan_action_id][0])
-                if len(actions)-1 > self.dispatch_plan_action_id:
-                    self.dispatch_plan_action_id += 1
-                else:
-                    break
+        while len(actions[self.dispatch_plan_action_id][1]) > 0:    
+            action = actions[self.dispatch_plan_action_id][1].pop(0)
+            obs, reward, done, info = self.step(action)
+            if render:
+                self.render()
+            reward_sum += reward
+            return obs, reward_sum, done, info
+        self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
+
+        # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
+        if not actions[self.dispatch_plan_action_id][1]:
+            self.process_action_effect(actions[self.dispatch_plan_action_id][0])
+            if len(actions)-1 > self.dispatch_plan_action_id:
+                self.dispatch_plan_action_id += 1
+           
         
         if self.dispatch_plan_action_id + 1 <= len(actions):
             while len(actions[self.dispatch_plan_action_id][1]) > 0:    
@@ -558,6 +542,7 @@ class MyHiPRLGridV0(MiniGridEnv):
                 if render:
                     self.render()
                 reward_sum += reward
+                return obs, reward_sum, done, info
             self.prev_dispatch_plan_action_id = self.dispatch_plan_action_id        
         
             # if actions for semantic action is done (= actions[dispatch_plan_action_id][1] is empty)
@@ -872,7 +857,6 @@ class MyHiPRLGridV0(MiniGridEnv):
                     
                     # update object map
                     if fwd_cell.type == 'box':
-                        self.seen_box.add(fwd_cell.objectId)
                         #print("fwd_cell.objectId: %d" % fwd_cell.objectId)
                         if fwd_cell.isOpen == True:
                             if fwd_cell.contains is not None:
@@ -881,8 +865,7 @@ class MyHiPRLGridV0(MiniGridEnv):
                                     self.ball_map_one_hot.update_cell(front, 255)
                                     self.unknown_map_one_hot.update_cell(front, 0)
                                     self.object_map_mlp.update_cell(front, ObjectMap_MLP.ObjGridStates.ball + ObjectMap_MLP.ObjGridStates.box)
-                                    self.found = True
-                                    
+
                                 elif fwd_cell.contains.type == 'key':
                                     self.object_map.update_cell(front, ObjectMap.ObjGridStates.key, center_only = True)
                             else:
@@ -914,7 +897,6 @@ class MyHiPRLGridV0(MiniGridEnv):
                         self.object_map_mlp.update_cell(front, ObjectMap_MLP.ObjGridStates.wall)
                         
                     elif fwd_cell.type == 'goal':
-                        self.found_goal_ = True
                         self.object_map.update_cell(front, ObjectMap.ObjGridStates.goal)
                         self.object_map_mlp.update_cell(front, ObjectMap_MLP.ObjGridStates.goal)
                         self.goal_map_one_hot.update_cell(front, 255)
@@ -955,7 +937,6 @@ class MyHiPRLGridV0(MiniGridEnv):
                     else:
                         # update object map
                         if object.type == 'box':
-                            self.seen_box.add(object.objectId)
                             if object.objectId in self.checked_receptacles:
                                 pass
                             
@@ -1000,7 +981,6 @@ class MyHiPRLGridV0(MiniGridEnv):
                             self.object_map_mlp.update_cell(np.array([wx,wy]), ObjectMap_MLP.ObjGridStates.wall)
 
                         elif object.type == 'goal':
-                            self.found_goal_ = True
                             self.object_map.update_cell(np.array([wx, wy]), ObjectMap.ObjGridStates.goal)
                             self.goal_map_one_hot.update_cell(np.array([wx,wy]), 255)
                             self.unknown_map_one_hot.update_cell(np.array([wx,wy]), 0)
@@ -1151,8 +1131,8 @@ class MyHiPRLGridV0(MiniGridEnv):
             print("process_action_effect service call failed: %s" %e)
             return False   
 register(
-    id='MiniGrid-MyHiPRLGrid-v0',
-    entry_point='gym_minigrid.envs:MyHiPRLGridV0'
+    id='MiniGrid-MyHiPRLGridPI-v0',
+    entry_point='gym_minigrid.envs:MyHiPRLGridPIV0'
 )
 
 """
